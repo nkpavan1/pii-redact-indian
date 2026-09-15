@@ -1,0 +1,48 @@
+[project]
+name = "pii-redact"
+version = "0.1.0"
+description = "Local PII redaction and pseudonymization CLI for Indian personal documents"
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    # presidio-structured and presidio-image-redactor from the original
+    # architecture doc are deliberately NOT here: extract/{csv_,xlsx,json_,
+    # image,pdf}.py ended up hand-built against stdlib csv/json, openpyxl,
+    # and pytesseract directly, so the review-gate/allow-list/mapping-store
+    # pipeline stays in full control end to end, rather than handing a
+    # whole file to an opaque all-in-one engine. Explicitly allowed by the
+    # project instructions ("deviating from this stack is fine if there's
+    # a concrete reason... default to extending Presidio's recognizer/
+    # operator framework rather than building a parallel detection
+    # system" - pytesseract-for-OCR-primitives is exactly that: extending,
+    # not parallel).
+    "presidio-analyzer>=2.2",
+    "presidio-anonymizer>=2.2",
+    "spacy>=3.7",
+    "pymupdf>=1.24",
+    "openpyxl>=3.1",
+    "pytesseract>=0.3.10",
+    "pillow>=10.0",
+    "cryptography>=42.0",
+    "keyring>=25.0",
+    "filelock>=3.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[project.scripts]
+redact = "pii_redact.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

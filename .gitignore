@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Never commit real documents or the mapping store
+/input/
+/output/
+*.mapping.db
+*.mapping.enc
+*.key
