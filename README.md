@@ -1,4 +1,4 @@
-# pii-redact
+# Personal Identity Information (PII) Redaction Tool 
 
 A local command-line tool that redacts or pseudonymizes PII in Indian
 personal documents — PDF, XLSX, CSV, JSON, and JPEG/PNG ID scans — so raw
