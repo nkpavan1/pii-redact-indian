@@ -13,7 +13,7 @@ from presidio_analyzer import RecognizerResult
 from presidio_anonymizer.entities import OperatorConfig
 
 from pii_redact.anonymize.mapping_store import MappingStore
-from pii_redact.anonymize.operators import get_anonymizer_engine
+from pii_redact.anonymize.operators import get_anonymizer_engine, pseudonym_operators
 from pii_redact.audit.logger import AuditLogger
 from pii_redact.config.allowlists import allowlist_for
 from pii_redact.detect.analyzer import detect_in_block
@@ -288,9 +288,7 @@ def _anonymize_blocks(
 
     engine = get_anonymizer_engine()
     if mode == Mode.PSEUDONYMIZE:
-        operators = {
-            "DEFAULT": OperatorConfig("consistent_pseudonym", {"mapping_store": mapping_store})
-        }
+        operators = pseudonym_operators(mapping_store)
     else:
         operators = {"DEFAULT": OperatorConfig("replace")}
 

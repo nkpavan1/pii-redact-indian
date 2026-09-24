@@ -3,7 +3,7 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 
 from pii_redact.anonymize.mapping_store import MappingStore
-from pii_redact.reverse.reverse import reverse
+from pii_redact.reverse.reverse import find_codes, reverse, reverse_many
 
 
 class FakeMappingStore(MappingStore):
@@ -63,6 +63,25 @@ def test_code_next_to_punctuation_still_reverses():
     assert reverse(text, store) == (
         "Ravi Kumar's PAN (ABCPE1234F), \"Ravi Kumar\"; Ravi Kumar."
     )
+
+
+def test_find_codes_returns_whole_token_spans_of_known_codes_only():
+    text = "PERSON_A, PERSON_AB, IN_PAN_A. PERSON_Z"
+    assert find_codes(text, {"PERSON_A", "IN_PAN_A"}) == [(0, 8), (21, 29)]
+    assert find_codes(text, set()) == []
+
+
+def test_reverse_many_reads_the_store_once():
+    class CountingStore(FakeMappingStore):
+        reads = 0
+
+        def all_codes(self):
+            CountingStore.reads += 1
+            return super().all_codes()
+
+    store = CountingStore({"PERSON_A": "Ravi Kumar"})
+    assert reverse_many(["PERSON_A", "hi PERSON_A", ""], store) == ["Ravi Kumar", "hi Ravi Kumar", ""]
+    assert CountingStore.reads == 1
 
 
 def test_code_inside_a_json_string_reverses():

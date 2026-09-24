@@ -1,4 +1,17 @@
-from pii_redact.config.allowlists import DEFAULT_ALLOWLIST, allowlist_for
+from pii_redact.config.allowlists import DEFAULT_ALLOWLIST, DOC_TYPE_ALLOWLISTS, allowlist_for
+from pii_redact.detect.analyzer import get_analyzer
+
+
+def test_every_allowlisted_entity_has_a_recognizer():
+    # Presidio silently skips an entity type it has no recognizer for, so a
+    # typo here would quietly switch redaction off for that type.
+    supported = set(get_analyzer().get_supported_entities())
+    for doc_type, entities in DOC_TYPE_ALLOWLISTS.items():
+        assert set(entities) <= supported, doc_type
+
+
+def test_chat_allowlist_matches_generic_for_now():
+    assert allowlist_for("chat") == allowlist_for("generic")
 
 
 def test_unknown_doc_type_falls_back_to_default():

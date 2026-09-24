@@ -2,8 +2,8 @@
 
 Registered against presidio-anonymizer's OperatorType.Anonymize. Given a
 detected entity, looks up (or creates) a stable code from the mapping store
-- same real value always yields the same code (e.g. `PERSON_A`, `PAN_A`)
-across documents and sessions, per the project instructions.
+- same real value always yields the same code (e.g. `PERSON_A`,
+`IN_PAN_A`) across documents and sessions, per the project instructions.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
 from presidio_anonymizer.operators import Operator, OperatorType
 
 from pii_redact.anonymize.mapping_store import MappingStore, normalize_value
@@ -47,3 +48,10 @@ def get_anonymizer_engine() -> AnonymizerEngine:
     engine = AnonymizerEngine()
     engine.add_anonymizer(ConsistentPseudonymOperator)
     return engine
+
+
+def pseudonym_operators(mapping_store: MappingStore) -> dict[str, OperatorConfig]:
+    """Operator config that pseudonymizes every entity type through
+    `mapping_store` - shared by the document pipeline and the string API so
+    both issue codes the same way."""
+    return {"DEFAULT": OperatorConfig("consistent_pseudonym", {"mapping_store": mapping_store})}

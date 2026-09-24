@@ -148,6 +148,7 @@ def detect_in_block(
     language: str = "en",
     context_text: str | None = None,
     context_offset: int = 0,
+    score_threshold: float = SCORE_THRESHOLD,
 ) -> list[Detection]:
     """Runs the analyzer over `block.text` by default. When `context_text`
     is given (a wider window built by the caller, e.g. pipeline.py's
@@ -174,7 +175,7 @@ def detect_in_block(
         text=text,
         entities=entities,
         language=language,
-        score_threshold=SCORE_THRESHOLD,
+        score_threshold=score_threshold,
     )
 
     block_start = context_offset

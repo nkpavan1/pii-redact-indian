@@ -70,6 +70,10 @@ DOC_TYPE_ALLOWLISTS: dict[str, list[str]] = {
     # needed for it specifically.
     "ais": [*_ALWAYS_SAFE, _DOB_ENTITY],
     "generic": DEFAULT_ALLOWLIST,
+    # Free text sent to a cloud model (the redact-service / string API
+    # default). Same set as generic today; a separate entry so chat can
+    # diverge (e.g. adding LOCATION) without changing document behavior.
+    "chat": [*_ALWAYS_SAFE, _DOB_ENTITY],
 }
 
 

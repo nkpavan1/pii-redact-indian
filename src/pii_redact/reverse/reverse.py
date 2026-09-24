@@ -19,21 +19,46 @@ never matches inside `PERSON_AB` or `XPERSON_A`, while `PERSON_A's` and
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Collection, Mapping, Sequence
 
 from pii_redact.anonymize.mapping_store import MappingStore
 
+# A whole run of ASCII word characters that contains an underscore - the
+# shape of every issued code (ENTITY_TYPE + "_" + letters, see
+# mapping_store._make_code). The lookarounds pin a match to the entire run,
+# which is then looked up exactly: that is what makes codes match only as
+# whole tokens, and it keeps the cost linear in the text however many codes
+# the store holds (an alternation of every code would not be).
+_CODE_SHAPED_TOKEN = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z0-9_]*_[A-Za-z0-9_]*(?![A-Za-z0-9_])")
+
+
+def find_codes(text: str, known_codes: Collection[str]) -> list[tuple[int, int]]:
+    """(start, end) of every whole-token occurrence of a known code in
+    `text`, in order. Used on the redact side to leave codes that are
+    already in a text alone."""
+    if not known_codes:
+        return []
+    return [m.span() for m in _CODE_SHAPED_TOKEN.finditer(text) if m.group(0) in known_codes]
+
+
+def reverser_for(codes_to_values: Mapping[str, str]) -> Callable[[str], str]:
+    """A function that reverses every known code in a text - built once so
+    reversing many texts reads the mapping store only once."""
+    if not codes_to_values:
+        return lambda text: text
+
+    def _reverse(text: str) -> str:
+        return _CODE_SHAPED_TOKEN.sub(
+            lambda m: codes_to_values.get(m.group(0), m.group(0)), text
+        )
+
+    return _reverse
+
 
 def reverse(text: str, mapping_store: MappingStore) -> str:
-    codes_to_values = mapping_store.all_codes()
-    if not codes_to_values:
-        return text
+    return reverser_for(mapping_store.all_codes())(text)
 
-    # The token-boundary lookarounds are what stop partial matches; sorting
-    # longest-first additionally keeps alternation order deterministic.
-    codes_by_length_desc = sorted(codes_to_values, key=len, reverse=True)
-    pattern = re.compile(
-        r"(?<![A-Za-z0-9_])(?:"
-        + "|".join(re.escape(code) for code in codes_by_length_desc)
-        + r")(?![A-Za-z0-9_])"
-    )
-    return pattern.sub(lambda m: codes_to_values[m.group(0)], text)
+
+def reverse_many(texts: Sequence[str], mapping_store: MappingStore) -> list[str]:
+    reverse_one = reverser_for(mapping_store.all_codes())
+    return [reverse_one(text) for text in texts]
