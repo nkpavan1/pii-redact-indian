@@ -168,6 +168,38 @@ with the caveats above).
 Full stage-by-stage detail, current test coverage, and exactly what's
 been verified end-to-end are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
+## Publishing redacted copies: `redact-publish`
+
+Drop originals into an outbox folder, and `redact-publish` turns each one
+into a reviewed, redacted markdown copy in a published folder:
+
+```powershell
+redact-publish                    # outbox H:\ai\vaults\personal\outbox -> H:\ai\vaults\reference\redacted
+redact-publish --outbox X --published Y --home Z --doc-type bank_statement
+```
+
+- **Recursive and incremental.** Unchanged originals are skipped. Edited ones
+  are re-published under the same name. An original that disappears has its
+  copy removed, but never when the outbox is empty or unreachable, and never
+  if the copy was changed by hand.
+- **Residual gate.** After redaction, the markdown is scanned again. Anything
+  that still looks like PII **holds** the document: nothing is published, and
+  a report with the flagged values masked goes to `<home>\reports\`.
+- **Review.** Each document shows a redacted preview and counts, and asks
+  before publishing. `--yes` skips the prompt; the residual gate still
+  applies.
+- **Names.** Published names are opaque (`bank_statement-3f9a1c2b7d.md`),
+  because file names often contain a name. `--readable-names` derives them
+  from the redacted original name instead, but that is less reliable than
+  redacting text.
+- **Frontmatter.** Each copy carries `type: source`, `redacted: true`,
+  `doc_type`, `source_hash` (SHA-256 of the original) and `redacted_at`.
+- **Document type.** A top-level outbox folder named after a document type
+  (`outbox\bank_statement\...`) selects it automatically.
+
+It needs an initialized store (`redact-key init`, below) and never creates
+one on its own.
+
 ## The mapping store and its key
 
 Pseudonymized output is only reversible while you still have **both** the

@@ -23,6 +23,12 @@ DEFAULT_HOME = Path(r"H:\ai\redaction")
 
 STORE_FILE_NAME = "mapping_store.enc"
 AUDIT_LOG_FILE_NAME = "audit.log.jsonl"
+PUBLISH_MANIFEST_FILE_NAME = "publish_manifest.json"
+REPORTS_DIR_NAME = "reports"
+
+# redact-publish: where originals are dropped, and where redacted copies go.
+DEFAULT_OUTBOX = Path(r"H:\ai\vaults\personal\outbox")
+DEFAULT_PUBLISHED = Path(r"H:\ai\vaults\reference\redacted")
 
 
 def redaction_home() -> Path:

@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 redact = "pii_redact.cli:main"
 redact-key = "pii_redact.keytool:main"
+redact-publish = "pii_redact.publish:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

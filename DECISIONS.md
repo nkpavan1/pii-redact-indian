@@ -200,3 +200,64 @@ builds the LiteLLM hook). `HANDOFF.md` has the service contract;
   header line, since header cells are scanned either way.
 - **DOCX not added.** The prompt asks to check first: it needs the
   `python-docx` dependency.
+
+## Step 5: `redact-publish` (Tool 1)
+
+**Decisions**
+- **Detection uses the document pipeline, not `redact_text`.** The plan said
+  to redact through the string API, but the pipeline's layout-aware detection
+  is better for documents: it pairs PDF labels with their values, reads
+  frontmatter line by line, and so on. Codes are identical either way,
+  because both use the same store. The string API is used for the
+  **residual gate** (`find_pii`, a new read-only scan that ignores issued
+  codes).
+- **Output names are opaque by default** (`<doc_type>-<keyed hash>.md`). The
+  plan said to use the original name run through `redact_text`, but NER
+  routinely misses names in file names (`ravi_kumar`, `RaviKumar_Form16`).
+  `--readable-names` keeps the planned behavior as an opt-in, and falls back
+  to the opaque name if the redacted name still looks like PII.
+- **Keyed hashes for identifiers.** Manifest keys and audit IDs are an
+  HMAC-SHA256 of the outbox-relative path (`MappingStore.keyed_digest`, keyed
+  from the store key). A plain hash of a short, guessable file name can be
+  reversed by trying candidates. `source_hash` in the published frontmatter
+  is a plain SHA-256 of the original, as specified; a whole document isn't
+  guessable.
+- **Frontmatter.** A markdown source's own (redacted) frontmatter moves under
+  `source_frontmatter:`, so the published file has exactly one frontmatter
+  block and no key collisions.
+- **Held documents.**
+  - If an edited document is held, the previous published version (which
+    passed the gate) stays published.
+  - An unchanged held document is not reprocessed on the next run
+    ("still held"); `--force` reprocesses everything.
+  - Reports mask every flagged value and name the outbox file, so it can be
+    fixed. They live in `<home>\reports\` and never in a vault.
+- **Unpublishing guards** (unplanned, deliberate):
+  - Nothing is unpublished when the outbox has no files: an unmounted drive
+    looks exactly like "everything was deleted".
+  - A published file is deleted only if its own frontmatter still says it's
+    this tool's copy of that source.
+- **Other guards.**
+  - A second concurrent run is refused (a lock in the redaction home).
+  - The outbox, the published folder and the home must not be inside one
+    another.
+  - Hidden files and folders (`.obsidian`) and Office lock files (`~$...`)
+    are ignored.
+- **Document type.** `--doc-type` applies to everything; otherwise a
+  top-level outbox folder named after a known document type selects it.
+- **Exit code.** 1 when anything was held or failed, so a script notices.
+
+**Gaps and caveats**
+- **Codes are issued before review.** They're issued while building the
+  preview, so a declined or held document still leaves its codes in the
+  store. That's harmless: they're just unused.
+- **`--threshold` applies only to the residual gate.** The first pass always
+  uses the project threshold (0.5).
+- **The gate can hold documents the first pass got right.** It scans
+  differently-shaped text (for example PDF rows joined into lines, or the
+  address pattern running across codes), so it can flag new things. This is
+  the conservative direction, but expect some holds on real documents.
+  Reports show exactly what was flagged.
+- **No dry-run mode.**
+- **Not run against the real vault folders here.** Everything was tested on
+  temporary folders.

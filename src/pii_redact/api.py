@@ -227,6 +227,36 @@ def redact_text(
     return redact_texts([text], store, threshold=threshold, entities=entities)[0]
 
 
+@dataclass(frozen=True)
+class Finding:
+    """One detection that is still in the clear: an entity type, where it
+    is, and how confident the detector was. Never the value itself."""
+
+    entity_type: str
+    start: int
+    end: int
+    score: float
+
+
+def find_pii(
+    text: str,
+    store: MappingStore,
+    *,
+    threshold: float | None = None,
+    entities: Iterable[str] | None = None,
+) -> list[Finding]:
+    """Detections in `text` that are not codes the store issued - PII still
+    in the clear. Changes nothing, issues no codes. Used as the residual
+    check on already-redacted output: anything found here should have
+    been redacted and wasn't."""
+    _check_texts([text])
+    detections = _detect(text, _resolve_entities(entities), _resolve_threshold(threshold))
+    if not detections:
+        return []
+    detections = _outside_codes(detections, find_codes(text, set(store.all_codes())), text)
+    return sorted(Finding(d.entity_type, d.start, d.end, d.score) for d in detections)
+
+
 def reverse_texts(texts: Sequence[str], store: MappingStore) -> list[str]:
     """Replaces every code the store knows with its stored surface form;
     1:1 with `texts`, in order. Code-shaped tokens the store never issued

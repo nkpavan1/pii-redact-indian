@@ -57,6 +57,7 @@ lock, so correctness never depends on it.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -234,6 +235,9 @@ class MappingStore:
             self._fernet = Fernet(key)
         except (ValueError, TypeError) as exc:
             raise MappingStoreError(f"{self.store_path}: the key is not a valid Fernet key") from exc
+        # Separate from the encryption key (derived, never the key itself),
+        # used only for keyed_digest().
+        self._digest_key = hashlib.sha256(b"pii-redact/keyed-digest/v1\0" + key).digest()
 
         self._lock_path = self.store_path.with_name(self.store_path.name + ".lock")
         self._tmp_path = self.store_path.with_name(self.store_path.name + ".tmp")
@@ -322,6 +326,14 @@ class MappingStore:
             return self._snapshot
 
     # --- public API
+
+    def keyed_digest(self, text: str) -> str:
+        """HMAC-SHA256 of `text` under a key derived from this store's key.
+        For identifiers that must not reveal what they identify - e.g. a
+        document's path, which often carries a name. A plain hash of a short,
+        guessable string ("Ravi Kumar PAN.pdf") can be reversed by trying
+        candidates; this one can't without the key."""
+        return hmac.new(self._digest_key, text.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def load(self) -> int:
         """Reads the store now (whatever the cache says) and returns how many
