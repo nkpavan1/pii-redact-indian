@@ -23,6 +23,23 @@ class TextRenderError(ValueError):
     pass
 
 
+def redacted_text(source_path: Path, extracted: ExtractedDocument, replacements: dict[int, str]) -> str:
+    """The source text with every replaced block spliced back in place."""
+    text, _ = _read_text(source_path)
+
+    # Splice from the end backwards so earlier spans' offsets stay valid.
+    for block_index in sorted(replacements, key=lambda i: extracted.blocks[i].source_ref[0], reverse=True):
+        block = extracted.blocks[block_index]
+        start, end = block.source_ref
+        if text[start:end] != block.text:
+            raise TextRenderError(
+                f"{source_path}: block {block_index} no longer matches the "
+                "source text - refusing to write a mismatched output"
+            )
+        text = text[:start] + replacements[block_index] + text[end:]
+    return text
+
+
 class TextRenderer(Renderer):
     def render(
         self,
@@ -31,19 +48,6 @@ class TextRenderer(Renderer):
         replacements: dict[int, str],
         output_path: Path,
     ) -> None:
-        encoding = extracted.format_metadata["encoding"]
-        text, _ = _read_text(source_path)
-
-        # Splice from the end backwards so earlier spans' offsets stay valid.
-        for block_index in sorted(replacements, key=lambda i: extracted.blocks[i].source_ref[0], reverse=True):
-            block = extracted.blocks[block_index]
-            start, end = block.source_ref
-            if text[start:end] != block.text:
-                raise TextRenderError(
-                    f"{source_path}: block {block_index} no longer matches the "
-                    "source text - refusing to write a mismatched output"
-                )
-            text = text[:start] + replacements[block_index] + text[end:]
-
+        text = redacted_text(source_path, extracted, replacements)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(text.encode(encoding))
+        output_path.write_bytes(text.encode(extracted.format_metadata["encoding"]))

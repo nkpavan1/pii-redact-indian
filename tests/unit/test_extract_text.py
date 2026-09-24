@@ -25,9 +25,41 @@ def test_blank_lines_split_paragraphs(tmp_path):
     assert [b.location.row for b in extracted.blocks] == [0, 2, 4]
 
 
-def test_frontmatter_lines_are_scanned_like_any_paragraph(tmp_path):
-    _, extracted = _extract(tmp_path, b"---\nauthor: Ravi Kumar\n---\n\nBody.\n")
-    assert extracted.blocks[0].text == "---\nauthor: Ravi Kumar\n---"
+def test_frontmatter_is_one_block_per_line_without_delimiters(tmp_path):
+    _, extracted = _extract(
+        tmp_path,
+        b"---\nauthor: Ravi Kumar\ndob: 15/08/1990\ntags:\n  - loan\n---\n# Title\n\nBody text.\n",
+    )
+    assert [b.text for b in extracted.blocks] == [
+        "author: Ravi Kumar",
+        "dob: 15/08/1990",
+        "tags:",
+        "  - loan",
+        "# Title",
+        "Body text.",
+    ]
+    assert [b.location.row for b in extracted.blocks] == [1, 2, 3, 4, 6, 8]
+
+
+def test_frontmatter_closed_with_dots_and_crlf(tmp_path):
+    _, extracted = _extract(tmp_path, b"---\r\nauthor: Ravi Kumar\r\n...\r\nBody\r\n")
+    assert [b.text for b in extracted.blocks] == ["author: Ravi Kumar", "Body"]
+
+
+def test_unclosed_frontmatter_is_ordinary_text(tmp_path):
+    _, extracted = _extract(tmp_path, b"---\nauthor: Ravi Kumar\n\nBody\n")
+    assert [b.text for b in extracted.blocks] == ["---\nauthor: Ravi Kumar", "Body"]
+
+
+def test_frontmatter_only_applies_to_markdown_files(tmp_path):
+    _, extracted = _extract(tmp_path, b"---\nauthor: Ravi Kumar\n---\n", name="note.txt")
+    assert [b.text for b in extracted.blocks] == ["---\nauthor: Ravi Kumar\n---"]
+
+
+def test_frontmatter_values_render_back_in_place(tmp_path):
+    source, extracted = _extract(tmp_path, b"---\nauthor: Ravi Kumar\ntitle: Loan\n---\nBody\n")
+    out = _render(tmp_path, source, extracted, {0: "author: PERSON_A"})
+    assert out == b"---\nauthor: PERSON_A\ntitle: Loan\n---\nBody\n"
 
 
 def test_crlf_paragraph_has_no_trailing_carriage_return(tmp_path):

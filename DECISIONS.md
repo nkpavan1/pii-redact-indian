@@ -143,3 +143,60 @@ builds the LiteLLM hook). `HANDOFF.md` has the service contract;
 - **Measured throughput.** A new code costs roughly 6 ms under full
   8-process contention (lock, read, encrypt, fsync, rename). Lookups of
   existing codes in cache mode cost one `stat()`.
+
+## Step 4: markdown and text in, markdown out
+
+**Decisions**
+- **Frontmatter.**
+  - Handled line by line, not by parsing YAML. Each non-blank line between
+    the opening `---` and a closing `---` or `...` is its own block, so a
+    key (`dob:`) is the context word for its own value only.
+  - Delimiter lines are never scanned. An unclosed block is ordinary text.
+  - Applies to `.md` and `.markdown` only, not `.txt`.
+- **Fenced code blocks** needed no special case. They're scanned as ordinary
+  paragraphs, and because rendering splices only the detected spans back in,
+  everything else in them stays byte-for-byte.
+- **Markdown output for every format** (`render/markdown.py`), from the same
+  replacements as native output, so codes are identical either way:
+  - text/markdown: the source, spliced in place;
+  - PDF and images: lines in reading order under `## Page N`, with
+    side-by-side lines on one row joined by ` | `;
+  - CSV and XLSX: markdown tables, with cell comments listed under each
+    sheet;
+  - JSON: a fenced, pretty-printed block, fenced with more backticks than
+    any run in the content.
+- **Formula results in markdown.** Markdown output **does** replace
+  PII-bearing formula results, which native XLSX output must leave in place.
+  So `build_preview` counts read-only detections as "unredactable" only for
+  native output, and `--yes` proceeds for markdown.
+- **Never rendered, because nothing in them is scanned:** sheet names (shown
+  as `## Sheet N`), defined names, PDF metadata and annotations, images
+  embedded in PDFs, and the input file name.
+- **Output file names.** `note.md` stays `note.md`; anything else gets
+  `.md` appended (`statement.pdf.md`), so inputs that differ only by
+  extension can't collide.
+- **CLI.** `redact --format {native,markdown}`, defaulting to `native`, so
+  existing invocations behave as before.
+- **Reusable stages.** `run_pipeline` is now built from public stages
+  (`analyze_document`, `build_preview`, `markdown_output_name`), so
+  redact-publish can run the same detection without the CLI's printouts.
+
+**Gaps and caveats**
+- **No table reconstruction for PDFs.** Tables in PDFs come out as rows of
+  ` | `-joined lines.
+- **Markdown tables in `.md` input are one paragraph.** A header cell's
+  context doesn't reach values in later rows.
+- **Structured data still lacks field-name context.** A CSV, XLSX or JSON
+  value is analyzed alone, not as `column: value`. This is the long-standing
+  README gap. Analyzing `column: value` the way frontmatter lines are handled
+  would close much of it. Not done, because it isn't in the plan; proposed
+  as a follow-up.
+- **Numeric cells and values, and JSON object keys, are not scanned.** This
+  is unchanged from before, and markdown output shows them as-is.
+- **Hidden rows and sheets are included.** Markdown shows hidden XLSX rows
+  and sheets like any other, the same way extraction treats them.
+- **CSV header detection is still a heuristic.** The sniffer can call an
+  all-text first row data, not a header. That affects only the table's
+  header line, since header cells are scanned either way.
+- **DOCX not added.** The prompt asks to check first: it needs the
+  `python-docx` dependency.

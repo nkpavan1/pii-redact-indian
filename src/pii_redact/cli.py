@@ -1,6 +1,7 @@
 """CLI entry point.
 
     redact <input> -o <output_dir> --mode {redact|pseudonymize} [--doc-type TYPE] [--yes]
+           [--format {native|markdown}]
 
 `<input>` may be a single file or a directory (batch mode, non-recursive).
 `--yes` skips the interactive y/N prompt but still refuses to write output
@@ -18,7 +19,7 @@ from pii_redact.anonymize.mapping_store import MappingStore
 from pii_redact.audit.logger import AuditLogger
 from pii_redact.config.allowlists import DOC_TYPE_ALLOWLISTS
 from pii_redact.pipeline import run_batch, run_pipeline
-from pii_redact.types import Mode, PipelineResult
+from pii_redact.types import Mode, OutputFormat, PipelineResult
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,6 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
             "extraction errors and on any unredactable/formula-derived detections)."
         ),
     )
+    parser.add_argument(
+        "--format", dest="output_format", type=OutputFormat, choices=list(OutputFormat),
+        default=OutputFormat.NATIVE,
+        help=(
+            "native: write the same format as the input (default). markdown: write "
+            "<name>.md, a text rendering of any input format, for LLMs and wikis."
+        ),
+    )
     return parser
 
 
@@ -89,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         results = run_batch(
             args.input, args.output_dir, args.mode, args.doc_type,
             mapping_store, audit_logger, non_interactive=args.yes,
+            output_format=args.output_format,
         )
     else:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             run_pipeline(
                 args.input, args.output_dir, args.mode, args.doc_type,
                 mapping_store, audit_logger, non_interactive=args.yes,
+                output_format=args.output_format,
             )
         ]
 

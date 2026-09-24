@@ -76,6 +76,37 @@ def _navigate_to_parent(root: Any, tokens: list[str | int], path: str) -> tuple[
     return node, tokens[-1]
 
 
+def redacted_document(source_path: Path, extracted: ExtractedDocument, replacements: dict[int, str]) -> Any:
+    """The re-parsed source with every replacement written back at its
+    recorded path."""
+    text = source_path.read_text(encoding="utf-8-sig")
+    try:
+        root = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise JsonRenderError(f"{source_path}: invalid JSON on re-read ({exc})") from exc
+
+    for block_index, new_text in replacements.items():
+        block = extracted.blocks[block_index]
+        path = block.location.json_path
+        tokens = _parse_path(path)
+        container, last_key = _navigate_to_parent(root, tokens, path)
+
+        try:
+            current = container[last_key]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise JsonRenderError(
+                f"json_path {path!r} no longer resolves in the re-read source - "
+                "refusing to write a mismatched output"
+            ) from exc
+        if not isinstance(current, str):
+            raise JsonRenderError(
+                f"json_path {path!r} now points at a {type(current).__name__}, "
+                "not the string it was when detected - refusing to overwrite it"
+            )
+        container[last_key] = new_text
+    return root
+
+
 class JsonRenderer(Renderer):
     def render(
         self,
@@ -84,32 +115,7 @@ class JsonRenderer(Renderer):
         replacements: dict[int, str],
         output_path: Path,
     ) -> None:
-        text = source_path.read_text(encoding="utf-8-sig")
-        try:
-            root = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise JsonRenderError(f"{source_path}: invalid JSON on re-read ({exc})") from exc
-
-        for block_index, new_text in replacements.items():
-            block = extracted.blocks[block_index]
-            path = block.location.json_path
-            tokens = _parse_path(path)
-            container, last_key = _navigate_to_parent(root, tokens, path)
-
-            try:
-                current = container[last_key]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise JsonRenderError(
-                    f"json_path {path!r} no longer resolves in the re-read source - "
-                    "refusing to write a mismatched output"
-                ) from exc
-            if not isinstance(current, str):
-                raise JsonRenderError(
-                    f"json_path {path!r} now points at a {type(current).__name__}, "
-                    "not the string it was when detected - refusing to overwrite it"
-                )
-            container[last_key] = new_text
-
+        root = redacted_document(source_path, extracted, replacements)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         indent = extracted.format_metadata.get("indent")
         with output_path.open("w", encoding="utf-8") as f:

@@ -27,6 +27,11 @@ class Mode(str, Enum):
     PSEUDONYMIZE = "pseudonymize"
 
 
+class OutputFormat(str, Enum):
+    NATIVE = "native"  # same format as the input
+    MARKDOWN = "markdown"  # a .md rendering, whatever the input format
+
+
 @dataclass(frozen=True)
 class Location:
     """Where a detection occurred, in format-specific coordinates.

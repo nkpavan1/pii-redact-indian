@@ -30,6 +30,7 @@ from pii_redact.render.base import Renderer
 from pii_redact.render.csv_ import CsvRenderer
 from pii_redact.render.image import ImageRenderer
 from pii_redact.render.json_ import JsonRenderer
+from pii_redact.render.markdown import MarkdownRenderer
 from pii_redact.render.pdf import PdfRenderer
 from pii_redact.render.text import TextRenderer
 from pii_redact.render.xlsx import XlsxRenderer
@@ -39,6 +40,7 @@ from pii_redact.types import (
     Detection,
     ExtractedDocument,
     Mode,
+    OutputFormat,
     PipelineResult,
     PreviewSummary,
     TextBlock,
@@ -266,6 +268,8 @@ def _anonymize_blocks(
     detections: list[Detection],
     mode: Mode,
     mapping_store: MappingStore,
+    *,
+    include_read_only: bool = False,
 ) -> dict[int, str]:
     """Groups detections by block (a block can contain more than one
     entity, e.g. a free-text note mentioning both a name and a PAN) and
@@ -276,7 +280,9 @@ def _anonymize_blocks(
     read_only blocks (formula-derived results, defined names - see
     extract/xlsx.py) are skipped entirely, never entering the returned
     dict, which is exactly what tells the render stage to leave them
-    untouched (see Renderer.render's docstring). The caller is responsible
+    untouched (see Renderer.render's docstring) - unless
+    `include_read_only`, for outputs such as markdown that never write back
+    into the source structure. The caller is responsible
     for making sure a human actually saw that this happened - see
     PreviewSummary.unredactable_counts_by_entity and review/preview.py.
 
@@ -303,7 +309,7 @@ def _anonymize_blocks(
     with store_scope:
         for block_index, block_detections in detections_by_block.items():
             block = extracted.blocks[block_index]
-            if block.read_only:
+            if block.read_only and not include_read_only:
                 continue
             recognizer_results = [
                 RecognizerResult(entity_type=d.entity_type, start=d.start, end=d.end, score=d.score)
@@ -381,6 +387,54 @@ def _detect_all(
     return detections
 
 
+def analyze_document(input_path: Path, doc_type: str | None) -> tuple[ExtractedDocument, list[Detection]]:
+    """Ingest, extract and detect - everything before the review gate.
+    Raises UnsupportedFormatError for a format this tool doesn't handle and
+    lets any other stage error propagate; callers decide how to fail
+    closed."""
+    doc_format = detect_format(input_path)
+    extracted = _EXTRACTORS[doc_format]().extract(input_path)
+    return extracted, _detect_all(extracted, doc_format, doc_type)
+
+
+def build_preview(
+    input_path: Path,
+    extracted: ExtractedDocument,
+    detections: list[Detection],
+    *,
+    output_format: OutputFormat = OutputFormat.NATIVE,
+) -> PreviewSummary:
+    """Counts and locations for the review gate. Detections in read-only
+    blocks (formula results, defined names) only count as unredactable for
+    native output - markdown output never writes back into the workbook,
+    so it replaces them like anything else."""
+    counts_by_entity: dict[str, int] = {}
+    locations_by_entity: dict[str, list] = {}
+    unredactable_counts_by_entity: dict[str, int] = {}
+    for d in detections:
+        counts_by_entity[d.entity_type] = counts_by_entity.get(d.entity_type, 0) + 1
+        locations_by_entity.setdefault(d.entity_type, []).append(d.location)
+        if output_format == OutputFormat.NATIVE and extracted.blocks[d.block_index].read_only:
+            unredactable_counts_by_entity[d.entity_type] = (
+                unredactable_counts_by_entity.get(d.entity_type, 0) + 1
+            )
+    return PreviewSummary(
+        document=input_path,
+        counts_by_entity=counts_by_entity,
+        locations_by_entity=locations_by_entity,
+        unredactable_counts_by_entity=unredactable_counts_by_entity,
+    )
+
+
+def markdown_output_name(input_path: Path) -> str:
+    """`note.md` stays `note.md`; anything else gets `.md` appended
+    (`statement.pdf` -> `statement.pdf.md`), so two inputs that differ only
+    by extension can't overwrite each other's markdown."""
+    if input_path.suffix.lower() in {".md", ".markdown"}:
+        return input_path.name
+    return input_path.name + ".md"
+
+
 def _partial_path_for(output_path: Path) -> Path:
     # Keeps the real suffix: some renderers (PIL for images) pick the output
     # format from it.
@@ -396,53 +450,38 @@ def run_pipeline(
     audit_logger: AuditLogger,
     *,
     non_interactive: bool = False,
+    output_format: OutputFormat = OutputFormat.NATIVE,
 ) -> PipelineResult:
     """Fail-closed end to end: any error in ingest, extract, detect,
     anonymize, or render produces a not-written result (never the original
     passed through, never a half-written output). Output is rendered to a
     hidden partial file and only renamed into place once rendering has
-    fully succeeded."""
+    fully succeeded.
+
+    `output_format=MARKDOWN` writes `<name>.md` (see markdown_output_name)
+    instead of a file in the input's own format."""
     try:
-        doc_format = detect_format(input_path)
+        extracted, detections = analyze_document(input_path, doc_type)
     except UnsupportedFormatError as exc:
         return _not_written(input_path, mode, audit_logger, f"unsupported format: {exc}", failed=False)
     except Exception as exc:
         return _not_written(input_path, mode, audit_logger, _describe_failure(exc), failed=True)
 
-    try:
-        extracted = _EXTRACTORS[doc_format]().extract(input_path)
-        detections = _detect_all(extracted, doc_format, doc_type)
-    except Exception as exc:
-        return _not_written(input_path, mode, audit_logger, _describe_failure(exc), failed=True)
-
-    counts_by_entity: dict[str, int] = {}
-    locations_by_entity: dict[str, list] = {}
-    unredactable_counts_by_entity: dict[str, int] = {}
-    for d in detections:
-        counts_by_entity[d.entity_type] = counts_by_entity.get(d.entity_type, 0) + 1
-        locations_by_entity.setdefault(d.entity_type, []).append(d.location)
-        if extracted.blocks[d.block_index].read_only:
-            unredactable_counts_by_entity[d.entity_type] = (
-                unredactable_counts_by_entity.get(d.entity_type, 0) + 1
-            )
-
-    preview = PreviewSummary(
-        document=input_path,
-        counts_by_entity=counts_by_entity,
-        locations_by_entity=locations_by_entity,
-        unredactable_counts_by_entity=unredactable_counts_by_entity,
-    )
-
+    preview = build_preview(input_path, extracted, detections, output_format=output_format)
     if not confirm(preview, non_interactive=non_interactive):
         return _not_written(
             input_path, mode, audit_logger, "rejected at review gate", failed=False, preview=preview
         )
 
-    output_path = output_dir / input_path.name
+    markdown = output_format == OutputFormat.MARKDOWN
+    output_path = output_dir / (markdown_output_name(input_path) if markdown else input_path.name)
     partial_path = _partial_path_for(output_path)
     try:
-        replacements = _anonymize_blocks(extracted, detections, mode, mapping_store)
-        _RENDERERS[doc_format]().render(input_path, extracted, replacements, partial_path)
+        replacements = _anonymize_blocks(
+            extracted, detections, mode, mapping_store, include_read_only=markdown
+        )
+        renderer = MarkdownRenderer() if markdown else _RENDERERS[extracted.doc_format]()
+        renderer.render(input_path, extracted, replacements, partial_path)
         os.replace(partial_path, output_path)
     except Exception as exc:
         partial_path.unlink(missing_ok=True)
@@ -469,6 +508,7 @@ def run_batch(
     audit_logger: AuditLogger,
     *,
     non_interactive: bool = False,
+    output_format: OutputFormat = OutputFormat.NATIVE,
 ) -> list[PipelineResult]:
     """One document's failure never stops the batch: run_pipeline already
     turns stage errors into not-written results, and this loop catches
@@ -486,6 +526,7 @@ def run_batch(
                 mapping_store,
                 audit_logger,
                 non_interactive=non_interactive,
+                output_format=output_format,
             )
         except Exception as exc:
             result = _not_written(path, mode, None, _describe_failure(exc), failed=True)

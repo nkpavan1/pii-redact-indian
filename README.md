@@ -158,6 +158,7 @@ Key flags:
 | `--mapping-store` | Path to the encrypted mapping store (default `~/.pii_redact/mapping_store.enc`) — needed to reverse pseudonymized output later |
 | `--audit-log` | Path to the audit log (default `~/.pii_redact/audit.log.jsonl`) |
 | `--yes` | Skip the interactive confirmation prompt — still refuses to write output for a document that failed extraction or has content it can't safely auto-redact |
+| `--format` | `native` (default): same format as the input. `markdown`: a `.md` rendering of any input (`statement.pdf` → `statement.pdf.md`), which is what LLMs and wikis read best |
 
 `<input>` can be a single file or a directory (non-recursive batch mode).
 Every run stops at the review gate first — you'll see entity counts and
