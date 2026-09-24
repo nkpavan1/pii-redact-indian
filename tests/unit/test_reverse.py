@@ -40,3 +40,34 @@ def test_empty_mapping_store_is_a_no_op():
 def test_longest_code_wins_when_one_code_prefixes_another():
     store = FakeMappingStore({"PAN_A": "AAAA0000A", "PAN_A1": "BBBB1111B"})
     assert reverse("value: PAN_A1", store) == "value: BBBB1111B"
+
+
+def test_code_never_matches_inside_a_longer_unknown_token():
+    # PERSON_AB isn't in the store, so it must stay exactly as written -
+    # not become "Ravi KumarB".
+    store = FakeMappingStore({"PERSON_A": "Ravi Kumar"})
+    assert reverse("PERSON_AB and XPERSON_A and PERSON_A_1", store) == (
+        "PERSON_AB and XPERSON_A and PERSON_A_1"
+    )
+
+
+def test_unknown_code_shaped_token_is_left_untouched():
+    # Models sometimes invent codes that were never issued.
+    store = FakeMappingStore({"PERSON_A": "Ravi Kumar"})
+    assert reverse("PERSON_A met PERSON_Z.", store) == "Ravi Kumar met PERSON_Z."
+
+
+def test_code_next_to_punctuation_still_reverses():
+    store = FakeMappingStore({"PERSON_A": "Ravi Kumar", "IN_PAN_A": "ABCPE1234F"})
+    text = "PERSON_A's PAN (IN_PAN_A), \"PERSON_A\"; PERSON_A."
+    assert reverse(text, store) == (
+        "Ravi Kumar's PAN (ABCPE1234F), \"Ravi Kumar\"; Ravi Kumar."
+    )
+
+
+def test_code_inside_a_json_string_reverses():
+    import json
+
+    store = FakeMappingStore({"PERSON_A": "Ravi Kumar"})
+    payload = json.dumps({"reply": "Hello PERSON_A"})
+    assert json.loads(reverse(payload, store)) == {"reply": "Hello Ravi Kumar"}

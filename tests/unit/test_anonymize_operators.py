@@ -19,7 +19,9 @@ class InMemoryMappingStore(MappingStore):
         self._code_to_value: dict[str, str] = {}
         self._counters: dict[str, int] = {}
 
-    def get_or_create_code(self, entity_type: str, raw_value: str) -> str:
+    def get_or_create_code(
+        self, entity_type: str, raw_value: str, display: str | None = None
+    ) -> str:
         key = (entity_type, raw_value)
         if key in self._value_to_code:
             return self._value_to_code[key]
@@ -27,7 +29,7 @@ class InMemoryMappingStore(MappingStore):
         letter = chr(ord("A") + self._counters[entity_type] - 1)
         code = f"{entity_type}_{letter}"
         self._value_to_code[key] = code
-        self._code_to_value[code] = raw_value
+        self._code_to_value[code] = display if display is not None else raw_value
         return code
 
     def reverse_lookup(self, code: str) -> str | None:
@@ -65,7 +67,8 @@ def test_consistent_pseudonym_operator_via_engine_gives_stable_codes():
     code1 = result1.text.replace("Contact: ", "")
     code2 = result2.text.replace("Signed by ", "")
     assert code1 == code2  # same real value -> same code, even across separate calls
-    assert store.reverse_lookup(code1) == "RAHUL KUMAR"  # normalized per mapping_store rules
+    # Keyed on the normalized form, but reverses to the surface form seen.
+    assert store.reverse_lookup(code1) == "Rahul Kumar"
 
 
 def test_consistent_pseudonym_operator_gives_different_codes_for_different_values():

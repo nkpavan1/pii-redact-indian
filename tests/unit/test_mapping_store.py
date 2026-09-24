@@ -1,3 +1,5 @@
+import json
+
 import keyring
 import pytest
 from cryptography.fernet import Fernet
@@ -110,6 +112,85 @@ def test_corrupted_file_raises_mapping_store_error(tmp_path):
     store = MappingStore(path, key=Fernet.generate_key())
     with pytest.raises(MappingStoreError):
         store.all_codes()
+
+
+# --- display form (B3): keyed on the normalized value, reversed to the
+# surface form actually seen in a document.
+
+
+def test_reverses_to_display_form_not_normalized_key(store):
+    code = store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    assert store.reverse_lookup(code) == "Ravi Kumar"
+    assert store.all_codes() == {code: "Ravi Kumar"}
+
+
+def test_address_display_keeps_its_spaces(store):
+    # normalize_value strips spaces from non-PERSON keys; that must never
+    # leak into what reversal gives back.
+    code = store.get_or_create_code(
+        "IN_ADDRESS", "B204,SUNRISEAPARTMENTS,RAMPUR", display="B-204, Sunrise Apartments, Rampur"
+    )
+    assert store.reverse_lookup(code) == "B-204, Sunrise Apartments, Rampur"
+
+
+def test_display_whitespace_is_collapsed(store):
+    code = store.get_or_create_code("PERSON", "RAVI KUMAR", display="  Ravi\n Kumar ")
+    assert store.reverse_lookup(code) == "Ravi Kumar"
+
+
+def test_same_key_different_display_keeps_one_code(store):
+    c1 = store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    c2 = store.get_or_create_code("PERSON", "RAVI KUMAR", display="RAVI KUMAR")
+    assert c1 == c2
+
+
+def test_all_caps_display_upgrades_to_later_mixed_case_sighting(store):
+    # Bank statements print names in capitals; a later "Ravi Kumar" is the
+    # better form to show a human.
+    code = store.get_or_create_code("PERSON", "RAVI KUMAR", display="RAVI KUMAR")
+    assert store.reverse_lookup(code) == "RAVI KUMAR"
+    store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    assert store.reverse_lookup(code) == "Ravi Kumar"
+
+
+def test_mixed_case_display_is_never_downgraded(store):
+    code = store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    store.get_or_create_code("PERSON", "RAVI KUMAR", display="RAVI KUMAR")
+    store.get_or_create_code("PERSON", "RAVI KUMAR", display="ravi kumar")
+    assert store.reverse_lookup(code) == "Ravi Kumar"
+
+
+def test_display_upgrade_is_persisted(tmp_path):
+    key = Fernet.generate_key()
+    path = tmp_path / "mapping.enc"
+    code = MappingStore(path, key=key).get_or_create_code("PERSON", "RAVI KUMAR", display="RAVI KUMAR")
+    MappingStore(path, key=key).get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    assert MappingStore(path, key=key).reverse_lookup(code) == "Ravi Kumar"
+
+
+def _write_legacy_store(path, key, entries, counters):
+    # A store written before `display` existed: entries carry only
+    # entity_type / value / code.
+    plaintext = json.dumps({"entries": entries, "counters": counters}).encode("utf-8")
+    path.write_bytes(Fernet(key).encrypt(plaintext))
+
+
+def test_legacy_store_without_display_still_reverses_and_keeps_its_codes(tmp_path):
+    key = Fernet.generate_key()
+    path = tmp_path / "legacy.enc"
+    _write_legacy_store(
+        path, key,
+        [{"entity_type": "PERSON", "value": "RAVI KUMAR", "code": "PERSON_A"}],
+        {"PERSON": 1},
+    )
+    store = MappingStore(path, key=key)
+
+    assert store.all_codes() == {"PERSON_A": "RAVI KUMAR"}
+    # Same normalized key -> same existing code, no new entry...
+    assert store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar") == "PERSON_A"
+    # ...and that sighting lazily upgrades the legacy all-caps value.
+    assert store.reverse_lookup("PERSON_A") == "Ravi Kumar"
+    assert store.get_or_create_code("PERSON", "ASHA RAO", display="Asha Rao") == "PERSON_B"
 
 
 def test_different_store_paths_get_different_keyring_usernames(tmp_path):

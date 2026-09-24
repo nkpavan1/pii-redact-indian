@@ -22,7 +22,7 @@ class ConsistentPseudonymOperator(Operator):
         entity_type: str = params["entity_type"]
         mapping_store: MappingStore = params["mapping_store"]
         normalized = normalize_value(entity_type, text)
-        return mapping_store.get_or_create_code(entity_type, normalized)
+        return mapping_store.get_or_create_code(entity_type, normalized, display=text)
 
     def validate(self, params: dict | None = None) -> None:
         params = params or {}

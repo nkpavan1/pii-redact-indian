@@ -7,11 +7,20 @@ identifier back to a real value at the end of a workflow. The LLM/agent side
 never has access to this file.
 
 Storage format: a single Fernet-encrypted file at store_path. Decrypted
-plaintext is JSON: {"entries": [{"entity_type", "value", "code"}, ...],
-"counters": {entity_type: int}}. Entries are a flat list rather than a
-{value: code} dict so entity_type is never reconstructed by parsing the
-code string (see _make_code) - keeps lookup unambiguous even if two entity
-types ever produced visually similar codes.
+plaintext is JSON: {"entries": [{"entity_type", "value", "display",
+"code"}, ...], "counters": {entity_type: int}}. Entries are a flat list
+rather than a {value: code} dict so entity_type is never reconstructed by
+parsing the code string (see _make_code) - keeps lookup unambiguous even if
+two entity types ever produced visually similar codes.
+
+`value` is the normalized lookup key (see normalize_value) - upper-cased,
+and for IDs stripped of spaces/hyphens - which is right for matching but
+wrong for showing a human: reversing to it turned "Ravi Kumar" into "RAVI
+KUMAR" and an address into one run-together word. `display` is the surface
+form actually seen in a document, and it's what reversal returns. Entries
+written before `display` existed have none; they reverse to `value` until
+their next sighting records one (lazy migration - nothing is rewritten up
+front).
 
 Key management: one Fernet key per store_path (not one global key), stored
 in the OS credential manager via `keyring` - on Windows this lands in
@@ -74,6 +83,30 @@ def _make_code(entity_type: str, ordinal: int) -> str:
     return f"{entity_type}_{_letter_suffix(ordinal)}"
 
 
+def _clean_display(display: str) -> str:
+    # A span can wrap across a line break inside a paragraph; the display
+    # form is meant to be dropped back into running text, so collapse it.
+    return re.sub(r"\s+", " ", display.strip())
+
+
+def _has_mixed_case(text: str) -> bool:
+    return any(c.isupper() for c in text) and any(c.islower() for c in text)
+
+
+def _should_upgrade_display(current: str, candidate: str) -> bool:
+    """Bank statements and tax forms print names in ALL CAPS, so the first
+    sighting of a person is often the all-caps form. A later mixed-case
+    sighting ("Ravi Kumar" after "RAVI KUMAR") is the better form to show
+    back to a human, so it replaces an all-caps display - but only that
+    way round, so the display settles instead of flip-flopping between
+    sightings."""
+    return current.isupper() and _has_mixed_case(candidate)
+
+
+def _display_of(entry: dict) -> str:
+    return entry.get("display") or entry["value"]
+
+
 def _keyring_username_for(store_path: Path) -> str:
     # Hash the resolved path rather than using it verbatim as the keyring
     # username - keeps it a fixed, predictable shape regardless of path
@@ -124,17 +157,32 @@ class MappingStore:
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         self.store_path.write_bytes(encrypted)
 
-    def get_or_create_code(self, entity_type: str, raw_value: str) -> str:
+    def get_or_create_code(
+        self, entity_type: str, raw_value: str, display: str | None = None
+    ) -> str:
+        """`raw_value` is the normalized lookup key; `display` is the surface
+        form as it appeared in the document (defaults to `raw_value`)."""
+        display = _clean_display(display) if display is not None else None
         with FileLock(str(self._lock_path)):
             data = self._load()
             for entry in data["entries"]:
                 if entry["entity_type"] == entity_type and entry["value"] == raw_value:
+                    if display and _should_upgrade_display(_display_of(entry), display):
+                        entry["display"] = display
+                        self._save(data)
                     return entry["code"]
 
             ordinal = data["counters"].get(entity_type, 0) + 1
             code = _make_code(entity_type, ordinal)
             data["counters"][entity_type] = ordinal
-            data["entries"].append({"entity_type": entity_type, "value": raw_value, "code": code})
+            data["entries"].append(
+                {
+                    "entity_type": entity_type,
+                    "value": raw_value,
+                    "display": display or raw_value,
+                    "code": code,
+                }
+            )
             self._save(data)
             return code
 
@@ -143,11 +191,12 @@ class MappingStore:
             data = self._load()
             for entry in data["entries"]:
                 if entry["code"] == code:
-                    return entry["value"]
+                    return _display_of(entry)
             return None
 
     def all_codes(self) -> dict[str, str]:
-        """code -> real value, for building the reverse() substitution pass."""
+        """code -> display form, for building the reverse() substitution
+        pass."""
         with FileLock(str(self._lock_path)):
             data = self._load()
-            return {entry["code"]: entry["value"] for entry in data["entries"]}
+            return {entry["code"]: _display_of(entry) for entry in data["entries"]}

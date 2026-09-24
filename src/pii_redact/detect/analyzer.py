@@ -54,6 +54,7 @@ threshold and this threshold does not pretend to solve it.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
@@ -127,6 +128,19 @@ def _looks_like_a_person_name(text: str) -> bool:
     return not any(c.isdigit() for c in text)
 
 
+# spaCy's PERSON span swallows a trailing possessive ("Ravi Kumar's" -> one
+# span, confirmed by direct probe). Left in, it becomes part of the
+# mapping-store key, so "Ravi Kumar" and "Ravi Kumar's" would get two
+# different codes for one person, and reversal would reinsert the "'s"
+# after a code the LLM already wrote as "PERSON_A's".
+_PERSON_POSSESSIVE_SUFFIX = re.compile(r"['’][sS]?$")
+
+
+def _person_span_end(text: str, start: int, end: int) -> int:
+    match = _PERSON_POSSESSIVE_SUFFIX.search(text[start:end])
+    return start + match.start() if match else end
+
+
 def detect_in_block(
     block: TextBlock,
     block_index: int,
@@ -168,10 +182,13 @@ def detect_in_block(
 
     detections = []
     for r in results:
-        if r.entity_type == "PERSON" and not _looks_like_a_person_name(text[r.start : r.end]):
-            continue
+        r_end = r.end
+        if r.entity_type == "PERSON":
+            if not _looks_like_a_person_name(text[r.start : r.end]):
+                continue
+            r_end = _person_span_end(text, r.start, r.end)
         start = max(r.start, block_start)
-        end = min(r.end, block_end)
+        end = min(r_end, block_end)
         if start >= end:
             continue  # no overlap with this block at all
         detections.append(
