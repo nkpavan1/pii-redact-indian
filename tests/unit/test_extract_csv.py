@@ -1,6 +1,6 @@
 import pytest
 
-from pii_redact.extract.csv_ import CsvExtractionError, CsvExtractor
+from pii_redact.extract.csv_ import HEADER_ROW, CsvExtractionError, CsvExtractor
 from pii_redact.types import DocFormat
 
 
@@ -88,6 +88,31 @@ def test_empty_cells_are_skipped(tmp_path):
 
     cells = _cells(extracted)
     assert (0, "note") not in cells
+
+
+def test_header_cells_are_emitted_as_scannable_blocks(tmp_path):
+    p = tmp_path / "accounts.csv"
+    p.write_text("name,pan\nRavi Kumar,ABCPE1234F\nAsha Rao,ABCPR5678K\n", encoding="utf-8")
+    extracted = CsvExtractor().extract(p)
+
+    cells = _cells(extracted)
+    assert cells[(HEADER_ROW, "col_0")] == "name"
+    assert cells[(HEADER_ROW, "col_1")] == "pan"
+    # Data cells keep their header-derived column names.
+    assert cells[(0, "name")] == "Ravi Kumar"
+
+
+def test_uncertain_header_row_is_still_scanned(tmp_path):
+    # B1: a single-row file makes the sniffer give up, which falls back to
+    # "has a header" - that row used to be excluded from detection entirely.
+    p = tmp_path / "one_row.csv"
+    p.write_text("Ravi Kumar,ABCPE1234F\n", encoding="utf-8")
+    extracted = CsvExtractor().extract(p)
+
+    assert extracted.format_metadata["has_header"] is True
+    cells = _cells(extracted)
+    assert cells[(HEADER_ROW, "col_0")] == "Ravi Kumar"
+    assert cells[(HEADER_ROW, "col_1")] == "ABCPE1234F"
 
 
 def test_no_rows_raises(tmp_path):

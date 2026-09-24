@@ -59,6 +59,27 @@ def test_detects_csv_with_utf8_bom(tmp_path):
     assert detect_format(p) == DocFormat.CSV
 
 
+@pytest.mark.parametrize("name", ["note.md", "note.txt", "note.markdown", "NOTE.MD"])
+def test_prose_extensions_route_to_text_not_csv(tmp_path, name):
+    # B1: a note used to fall through to the CSV path, whose header sniffer
+    # dropped its first line from detection.
+    p = tmp_path / name
+    p.write_text("Ravi Kumar, PAN ABCPE1234F\n\nSecond paragraph, with commas.\n")
+    assert detect_format(p) == DocFormat.TEXT
+
+
+def test_markdown_starting_with_a_link_is_text_not_json(tmp_path):
+    p = tmp_path / "links.md"
+    p.write_text("[home](index.md)\n")
+    assert detect_format(p) == DocFormat.TEXT
+
+
+def test_magic_bytes_still_win_over_a_text_extension(tmp_path):
+    p = tmp_path / "actually_a_pdf.txt"
+    p.write_bytes(b"%PDF-1.7\n...")
+    assert detect_format(p) == DocFormat.PDF
+
+
 def test_rejects_invalid_json_extension(tmp_path):
     p = tmp_path / "broken.json"
     p.write_text("{not valid json")

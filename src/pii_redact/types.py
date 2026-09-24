@@ -19,6 +19,7 @@ class DocFormat(str, Enum):
     CSV = "csv"
     JSON = "json"
     IMAGE = "image"
+    TEXT = "text"  # plain text / markdown notes (.txt, .md, .markdown)
 
 
 class Mode(str, Enum):
@@ -117,3 +118,7 @@ class PipelineResult:
     preview: PreviewSummary
     written: bool
     failure_reason: str | None = None
+    # True when the document errored (unsupported format, extraction/detect/
+    # render failure) rather than being declined at the review gate. Either
+    # way nothing was written.
+    failed: bool = False

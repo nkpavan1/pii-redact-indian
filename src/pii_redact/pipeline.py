@@ -6,6 +6,7 @@ it deliberately does not know the internals of any one stage.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from presidio_analyzer import RecognizerResult
@@ -21,13 +22,15 @@ from pii_redact.extract.csv_ import CsvExtractor
 from pii_redact.extract.image import ImageExtractor
 from pii_redact.extract.json_ import JsonExtractor
 from pii_redact.extract.pdf import PdfExtractor
+from pii_redact.extract.text import TextExtractor
 from pii_redact.extract.xlsx import XlsxExtractor
-from pii_redact.ingest.format_detect import detect_format
+from pii_redact.ingest.format_detect import UnsupportedFormatError, detect_format
 from pii_redact.render.base import Renderer
 from pii_redact.render.csv_ import CsvRenderer
 from pii_redact.render.image import ImageRenderer
 from pii_redact.render.json_ import JsonRenderer
 from pii_redact.render.pdf import PdfRenderer
+from pii_redact.render.text import TextRenderer
 from pii_redact.render.xlsx import XlsxRenderer
 from pii_redact.review.preview import confirm
 from pii_redact.types import (
@@ -58,6 +61,7 @@ _EXTRACTORS: dict[DocFormat, type[Extractor]] = {
     DocFormat.CSV: CsvExtractor,
     DocFormat.JSON: JsonExtractor,
     DocFormat.IMAGE: ImageExtractor,
+    DocFormat.TEXT: TextExtractor,
 }
 
 _RENDERERS: dict[DocFormat, type[Renderer]] = {
@@ -66,6 +70,7 @@ _RENDERERS: dict[DocFormat, type[Renderer]] = {
     DocFormat.CSV: CsvRenderer,
     DocFormat.JSON: JsonRenderer,
     DocFormat.IMAGE: ImageRenderer,
+    DocFormat.TEXT: TextRenderer,
 }
 
 
@@ -306,38 +311,55 @@ def _anonymize_blocks(
     return replacements
 
 
-def run_pipeline(
-    input_path: Path,
-    output_dir: Path,
-    mode: Mode,
-    doc_type: str | None,
-    mapping_store: MappingStore,
-    audit_logger: AuditLogger,
-    *,
-    non_interactive: bool = False,
-) -> PipelineResult:
-    doc_format = detect_format(input_path)
-    extractor = _EXTRACTORS[doc_format]()
+_MAX_FAILURE_REASON_CHARS = 300
 
-    try:
-        extracted = extractor.extract(input_path)
-    except Exception as exc:  # fail-closed: report, never pass the original through
+
+def _describe_failure(exc: BaseException) -> str:
+    """Short, single-line reason for a failed document. Exception messages
+    from this project's own stages carry paths and positions, not document
+    content - but the length cap keeps an unexpectedly verbose third-party
+    message from flooding the CLI output."""
+    reason = f"{type(exc).__name__}: {exc}".replace("\n", " ")
+    if len(reason) > _MAX_FAILURE_REASON_CHARS:
+        reason = reason[: _MAX_FAILURE_REASON_CHARS - 3] + "..."
+    return reason
+
+
+def _not_written(
+    input_path: Path,
+    mode: Mode,
+    audit_logger: AuditLogger | None,
+    reason: str,
+    *,
+    failed: bool,
+    preview: PreviewSummary | None = None,
+) -> PipelineResult:
+    """Fail-closed result: nothing written, the reason reported, and (when
+    a logger is available) an audit entry recording that nothing was
+    written."""
+    if preview is None:
         preview = PreviewSummary(
             document=input_path,
             counts_by_entity={},
             locations_by_entity={},
-            failed_pages_or_sections=[str(exc)],
+            failed_pages_or_sections=[reason] if failed else [],
         )
+    if audit_logger is not None:
         audit_logger.log(str(input_path), mode.value, preview, written=False)
-        return PipelineResult(
-            source_path=input_path,
-            output_path=None,
-            mode=mode,
-            preview=preview,
-            written=False,
-            failure_reason=str(exc),
-        )
+    return PipelineResult(
+        source_path=input_path,
+        output_path=None,
+        mode=mode,
+        preview=preview,
+        written=False,
+        failure_reason=reason,
+        failed=failed,
+    )
 
+
+def _detect_all(
+    extracted: ExtractedDocument, doc_format: DocFormat, doc_type: str | None
+) -> list[Detection]:
     entities = allowlist_for(doc_type)
     detections: list[Detection] = []
     for i, block in enumerate(extracted.blocks):
@@ -350,6 +372,42 @@ def run_pipeline(
             detections.extend(_merge_detections(base_detections, windowed_detections))
         else:
             detections.extend(base_detections)
+    return detections
+
+
+def _partial_path_for(output_path: Path) -> Path:
+    # Keeps the real suffix: some renderers (PIL for images) pick the output
+    # format from it.
+    return output_path.with_name(f".{output_path.stem}.partial{output_path.suffix}")
+
+
+def run_pipeline(
+    input_path: Path,
+    output_dir: Path,
+    mode: Mode,
+    doc_type: str | None,
+    mapping_store: MappingStore,
+    audit_logger: AuditLogger,
+    *,
+    non_interactive: bool = False,
+) -> PipelineResult:
+    """Fail-closed end to end: any error in ingest, extract, detect,
+    anonymize, or render produces a not-written result (never the original
+    passed through, never a half-written output). Output is rendered to a
+    hidden partial file and only renamed into place once rendering has
+    fully succeeded."""
+    try:
+        doc_format = detect_format(input_path)
+    except UnsupportedFormatError as exc:
+        return _not_written(input_path, mode, audit_logger, f"unsupported format: {exc}", failed=False)
+    except Exception as exc:
+        return _not_written(input_path, mode, audit_logger, _describe_failure(exc), failed=True)
+
+    try:
+        extracted = _EXTRACTORS[doc_format]().extract(input_path)
+        detections = _detect_all(extracted, doc_format, doc_type)
+    except Exception as exc:
+        return _not_written(input_path, mode, audit_logger, _describe_failure(exc), failed=True)
 
     counts_by_entity: dict[str, int] = {}
     locations_by_entity: dict[str, list] = {}
@@ -370,21 +428,21 @@ def run_pipeline(
     )
 
     if not confirm(preview, non_interactive=non_interactive):
-        audit_logger.log(str(input_path), mode.value, preview, written=False)
-        return PipelineResult(
-            source_path=input_path,
-            output_path=None,
-            mode=mode,
-            preview=preview,
-            written=False,
-            failure_reason="rejected at review gate",
+        return _not_written(
+            input_path, mode, audit_logger, "rejected at review gate", failed=False, preview=preview
         )
 
-    replacements = _anonymize_blocks(extracted, detections, mode, mapping_store)
-
     output_path = output_dir / input_path.name
-    renderer = _RENDERERS[doc_format]()
-    renderer.render(input_path, extracted, replacements, output_path)
+    partial_path = _partial_path_for(output_path)
+    try:
+        replacements = _anonymize_blocks(extracted, detections, mode, mapping_store)
+        _RENDERERS[doc_format]().render(input_path, extracted, replacements, partial_path)
+        os.replace(partial_path, output_path)
+    except Exception as exc:
+        partial_path.unlink(missing_ok=True)
+        return _not_written(
+            input_path, mode, audit_logger, _describe_failure(exc), failed=True, preview=preview
+        )
 
     audit_logger.log(str(input_path), mode.value, preview, written=True)
     return PipelineResult(
@@ -406,11 +464,15 @@ def run_batch(
     *,
     non_interactive: bool = False,
 ) -> list[PipelineResult]:
+    """One document's failure never stops the batch: run_pipeline already
+    turns stage errors into not-written results, and this loop catches
+    anything that still escapes (e.g. the audit log itself failing), so
+    every remaining file is still processed and reported."""
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
     for path in sorted(p for p in input_dir.iterdir() if p.is_file()):
-        results.append(
-            run_pipeline(
+        try:
+            result = run_pipeline(
                 path,
                 output_dir,
                 mode,
@@ -419,5 +481,7 @@ def run_batch(
                 audit_logger,
                 non_interactive=non_interactive,
             )
-        )
+        except Exception as exc:
+            result = _not_written(path, mode, None, _describe_failure(exc), failed=True)
+        results.append(result)
     return results

@@ -2,7 +2,7 @@ import csv
 
 import pytest
 
-from pii_redact.extract.csv_ import CsvExtractor
+from pii_redact.extract.csv_ import HEADER_ROW, CsvExtractor
 from pii_redact.render.csv_ import CsvRenderError, CsvRenderer
 from pii_redact.types import ExtractedDocument, Location, TextBlock
 
@@ -105,6 +105,23 @@ def test_legacy_encoding_round_trip(tmp_path):
 
     grid = _read_grid(out, encoding="cp1252")
     assert grid == [["name", "note"], ["Rahul", "REDACTED"]]
+
+
+def test_header_cell_replacement_is_written_back(tmp_path):
+    # B1: a "header" that is really a data row (sniffer fallback on a
+    # single-row file) must be redactable like any other cell.
+    src = tmp_path / "one_row.csv"
+    src.write_text("Ravi Kumar,ABCPE1234F\n", encoding="utf-8")
+    extracted = CsvExtractor().extract(src)
+
+    header_index = next(
+        i for i, b in enumerate(extracted.blocks)
+        if b.location.row == HEADER_ROW and b.location.column == "col_0"
+    )
+    out = tmp_path / "out.csv"
+    CsvRenderer().render(src, extracted, {header_index: "PERSON_A"}, out)
+
+    assert _read_grid(out) == [["PERSON_A", "ABCPE1234F"]]
 
 
 def test_stale_location_raises_instead_of_silently_writing_wrong_cell(tmp_path):

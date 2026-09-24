@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from pii_redact.extract.csv_ import column_name_for
+from pii_redact.extract.csv_ import HEADER_ROW, column_name_for
 from pii_redact.render.base import Renderer
 from pii_redact.types import ExtractedDocument
 
@@ -55,19 +55,25 @@ class CsvRenderer(Renderer):
         header_row: list[str] | None = None
         data_rows = rows
         if has_header:
-            header_row = rows[0]
+            header_row = list(rows[0])
             data_rows = [list(r) for r in rows[1:]]
         else:
             data_rows = [list(r) for r in rows]
 
-        # (row_index, column_name) -> (row_index, col_index), built with the
-        # exact same naming rule the extractor used, so a block's location
-        # always resolves to the right cell.
-        position_by_location: dict[tuple[int, str], tuple[int, int]] = {}
+        # (row_index, column_name) -> target row list + col_index, built with
+        # the exact same naming rule the extractor used, so a block's
+        # location always resolves to the right cell. Header cells use
+        # HEADER_ROW and positional names, mirroring extract/csv_.py.
+        position_by_location: dict[tuple[int, str], tuple[list[str], int]] = {}
+        if header_row is not None:
+            for col_index in range(len(header_row)):
+                position_by_location[(HEADER_ROW, column_name_for(col_index, None))] = (
+                    header_row, col_index,
+                )
         for row_index, row in enumerate(data_rows):
             for col_index in range(len(row)):
                 column_name = column_name_for(col_index, header or header_row)
-                position_by_location[(row_index, column_name)] = (row_index, col_index)
+                position_by_location[(row_index, column_name)] = (row, col_index)
 
         for block_index, new_text in replacements.items():
             block = extracted.blocks[block_index]
@@ -78,8 +84,8 @@ class CsvRenderer(Renderer):
                     f"targets {key}, which no longer exists in the "
                     "re-read source - refusing to write a mismatched output"
                 )
-            row_index, col_index = position_by_location[key]
-            data_rows[row_index][col_index] = new_text
+            target_row, col_index = position_by_location[key]
+            target_row[col_index] = new_text
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding=encoding, newline="") as f:

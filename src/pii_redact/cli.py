@@ -62,8 +62,17 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_result(result: PipelineResult) -> None:
     if result.written:
         print(f"OK   {result.source_path} -> {result.output_path}")
+    elif result.failed:
+        print(f"FAIL {result.source_path}: {result.failure_reason}")
     else:
         print(f"SKIP {result.source_path}: {result.failure_reason}")
+
+
+def _summary_line(results: list[PipelineResult]) -> str:
+    written = sum(r.written for r in results)
+    failed = sum(r.failed for r in results)
+    skipped = len(results) - written - failed
+    return f"{written} written, {skipped} skipped, {failed} failed"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -92,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for result in results:
         _print_result(result)
+    print(_summary_line(results))
 
     return 0 if all(r.written for r in results) else 1
 

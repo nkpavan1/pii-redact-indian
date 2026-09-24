@@ -73,11 +73,18 @@ def _sniff_has_header(sample: str) -> bool:
         return csv.Sniffer().has_header(sample)
     except csv.Error:
         # Sniffer couldn't decide (e.g. a single-row file). Assume a header
-        # is present: treating a real header row as data just means it also
-        # gets scanned for PII (harmless), whereas treating real data as a
-        # header would silently exclude that row from field-name matching
-        # and from anonymization entirely.
+        # is present so field names exist to key off. This is only safe
+        # because header cells are scanned for PII like any other cell (see
+        # HEADER_ROW below) - a "header" that is really a data row can't
+        # slip through unredacted.
         return True
+
+
+# Location.row for header cells. Header cells are always emitted as
+# scannable blocks: the sniffer's header guess is a heuristic, and a wrong
+# guess used to drop that whole row from detection. Header columns are named
+# positionally (col_N) since the header itself is what's being scanned.
+HEADER_ROW = -1
 
 
 class CsvExtractor(Extractor):
@@ -98,6 +105,16 @@ class CsvExtractor(Extractor):
             data_rows = rows[1:]
 
         blocks: list[TextBlock] = []
+        if header is not None:
+            for col_index, cell in enumerate(header):
+                if not cell.strip():
+                    continue
+                blocks.append(
+                    TextBlock(
+                        text=cell,
+                        location=Location(row=HEADER_ROW, column=column_name_for(col_index, None)),
+                    )
+                )
         for row_index, row in enumerate(data_rows):
             for col_index, cell in enumerate(row):
                 if not cell.strip():

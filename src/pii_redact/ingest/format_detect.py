@@ -17,6 +17,12 @@ _ZIP_MAGIC = b"PK\x03\x04"
 _JPEG_MAGIC = b"\xff\xd8\xff"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+# Prose files are routed by extension (after the magic-byte checks above, so
+# a mislabeled PDF/image/XLSX still goes to the right extractor). Without
+# this, every UTF-8 file that wasn't JSON fell through to the CSV path,
+# where the header sniffer swallowed a note's first line unscanned.
+_TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
+
 
 class UnsupportedFormatError(ValueError):
     pass
@@ -58,6 +64,9 @@ def _detect_text_format(path: Path) -> DocFormat:
         raise UnsupportedFormatError(
             f"{path}: not PDF/XLSX/image and not valid UTF-8 text"
         ) from exc
+
+    if path.suffix.lower() in _TEXT_SUFFIXES:
+        return DocFormat.TEXT
 
     stripped = text.lstrip()
     if stripped.startswith("{") or stripped.startswith("["):
