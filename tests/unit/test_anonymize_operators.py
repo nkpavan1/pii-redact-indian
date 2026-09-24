@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from presidio_analyzer import RecognizerResult
 from presidio_anonymizer.entities import OperatorConfig
 
@@ -8,11 +9,12 @@ from pii_redact.anonymize.operators import ConsistentPseudonymOperator, get_anon
 
 
 class InMemoryMappingStore(MappingStore):
-    """Minimal working MappingStore for tests - the real one's persistence
-    is still NotImplementedError (see anonymize/mapping_store.py)."""
+    """Dict-backed MappingStore double - no file, no encryption round trip.
+    Passes an explicit key so constructing it never touches the OS
+    credential store (see tests/conftest.py's keyring guard)."""
 
     def __init__(self):
-        super().__init__(store_path=Path("unused"))
+        super().__init__(store_path=Path("unused"), key=Fernet.generate_key())
         self._value_to_code: dict[tuple[str, str], str] = {}
         self._code_to_value: dict[str, str] = {}
         self._counters: dict[str, int] = {}

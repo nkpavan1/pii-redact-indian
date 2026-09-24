@@ -1,15 +1,18 @@
 from pathlib import Path
 
+from cryptography.fernet import Fernet
+
 from pii_redact.anonymize.mapping_store import MappingStore
 from pii_redact.reverse.reverse import reverse
 
 
 class FakeMappingStore(MappingStore):
-    """Test double: real MappingStore.all_codes() is NotImplementedError
-    until the persistence backend is built."""
+    """Test double with a fixed code -> value table. Passes an explicit key
+    so constructing it never touches the OS credential store (see
+    tests/conftest.py's keyring guard)."""
 
     def __init__(self, codes_to_values: dict[str, str]):
-        super().__init__(store_path=Path("unused"))
+        super().__init__(store_path=Path("unused"), key=Fernet.generate_key())
         self._codes_to_values = codes_to_values
 
     def all_codes(self) -> dict[str, str]:

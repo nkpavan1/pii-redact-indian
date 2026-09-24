@@ -118,7 +118,10 @@ def test_different_store_paths_get_different_keyring_usernames(tmp_path):
     assert u1 != u2
 
 
+@pytest.mark.keyring
 def test_keyring_backed_key_is_created_once_and_reused(tmp_path):
+    # Writes (then deletes) a real OS Credential Manager entry, so it's
+    # opt-in only: set PII_REDACT_KEYRING_TESTS=1 to run it (see conftest.py).
     path = tmp_path / "mapping.enc"
     username = _keyring_username_for(path)
     try:
