@@ -167,6 +167,37 @@ with the caveats above).
 Full stage-by-stage detail, current test coverage, and exactly what's
 been verified end-to-end are in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
+## The mapping store and its key
+
+Pseudonymized output is only reversible while you still have **both** the
+encrypted store file and its key. The key lives in Windows Credential
+Manager, bound to the store file's full resolved path, so never move or
+rename a store once it's in use, and run every tool as the same Windows
+user.
+
+`redact-key` manages the key. Run it yourself, at a terminal; it's never
+meant for scripts or agents. `--store` defaults to
+`$env:PII_REDACT_HOME\mapping_store.enc`, or `H:\ai\redaction\mapping_store.enc`
+if `PII_REDACT_HOME` isn't set.
+
+```powershell
+redact-key init                           # one time: new empty store + key
+redact-key check                          # key present? decrypts the store? (never shows the key)
+redact-key export --clip --i-understand   # back the key up to your password manager
+redact-key import                         # restore it (hidden prompt); refuses a key that doesn't decrypt the store
+```
+
+`export --clip` copies the key without adding it to clipboard history
+(Win+V) or cloud clipboard sync, and clears the clipboard once you press
+Enter. Without `--clip` it prints the key; clear your terminal scrollback
+afterwards.
+
+**Backup:** keep the key in your password manager, and copy the `.enc`
+file (plus nothing else from that folder) to your usual backups whenever
+you like. It's encrypted, so the copy is safe anywhere. To restore on a
+new machine or Windows profile, put the file back at exactly the same path,
+then run `redact-key import`.
+
 ## Limitations & improvement scope
 
 Honest gaps, not hidden ones — each is documented in its own module's

@@ -7,6 +7,7 @@ it deliberately does not know the internals of any one stage.
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 from presidio_analyzer import RecognizerResult
@@ -278,6 +279,10 @@ def _anonymize_blocks(
     untouched (see Renderer.render's docstring). The caller is responsible
     for making sure a human actually saw that this happened - see
     PreviewSummary.unredactable_counts_by_entity and review/preview.py.
+
+    In pseudonymize mode the whole document's codes are issued inside one
+    mapping-store transaction: one lock and one save per document, rather
+    than one full re-encrypt per new value.
     """
     detections_by_block: dict[int, list[Detection]] = {}
     for d in detections:
@@ -289,22 +294,25 @@ def _anonymize_blocks(
     engine = get_anonymizer_engine()
     if mode == Mode.PSEUDONYMIZE:
         operators = pseudonym_operators(mapping_store)
+        store_scope = mapping_store.transaction()
     else:
         operators = {"DEFAULT": OperatorConfig("replace")}
+        store_scope = nullcontext()
 
     replacements: dict[int, str] = {}
-    for block_index, block_detections in detections_by_block.items():
-        block = extracted.blocks[block_index]
-        if block.read_only:
-            continue
-        recognizer_results = [
-            RecognizerResult(entity_type=d.entity_type, start=d.start, end=d.end, score=d.score)
-            for d in block_detections
-        ]
-        result = engine.anonymize(
-            text=block.text, analyzer_results=recognizer_results, operators=operators
-        )
-        replacements[block_index] = result.text
+    with store_scope:
+        for block_index, block_detections in detections_by_block.items():
+            block = extracted.blocks[block_index]
+            if block.read_only:
+                continue
+            recognizer_results = [
+                RecognizerResult(entity_type=d.entity_type, start=d.start, end=d.end, score=d.score)
+                for d in block_detections
+            ]
+            result = engine.anonymize(
+                text=block.text, analyzer_results=recognizer_results, operators=operators
+            )
+            replacements[block_index] = result.text
 
     return replacements
 

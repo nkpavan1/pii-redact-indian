@@ -147,19 +147,20 @@ def _outside_codes(
     return kept
 
 
-def _redact_one(
-    text: str,
-    store: MappingStore,
-    known_codes: set[str],
-    entities: list[str],
-    threshold: float,
-) -> RedactResult:
+def _detect(text: str, entities: list[str], threshold: float) -> list[Detection]:
     if not any(ch.isalnum() for ch in text):
-        return RedactResult(text=text)
-
-    detections = detect_in_block(
+        return []
+    return detect_in_block(
         TextBlock(text=text, location=Location()), 0, entities, score_threshold=threshold
     )
+
+
+def _pseudonymize(
+    text: str,
+    detections: list[Detection],
+    store: MappingStore,
+    known_codes: set[str],
+) -> RedactResult:
     detections = _outside_codes(detections, find_codes(text, known_codes), text)
     if not detections:
         return RedactResult(text=text)
@@ -191,19 +192,28 @@ def redact_texts(
 
     `threshold` is the minimum detection score (default: the project-wide
     SCORE_THRESHOLD). `entities` limits which entity types are redacted
-    (default: the "chat" allow-list, see config/allowlists.py)."""
+    (default: the "chat" allow-list, see config/allowlists.py).
+
+    Detection runs first, with no store lock held - it's the slow part.
+    Then every code the call needs is issued inside one store transaction:
+    one lock, and at most one save, however many texts and entities."""
     texts = list(texts)
     _check_texts(texts)
     resolved_threshold = _resolve_threshold(threshold)
     resolved_entities = _resolve_entities(entities)
 
-    known_codes = set(store.all_codes())
+    found = [_detect(text, resolved_entities, resolved_threshold) for text in texts]
+    if not any(found):
+        return [RedactResult(text=text) for text in texts]
+
     results = []
-    for text in texts:
-        result = _redact_one(text, store, known_codes, resolved_entities, resolved_threshold)
-        # A code issued for an earlier text counts as known for later ones.
-        known_codes.update(code for *_, code in result.spans)
-        results.append(result)
+    with store.transaction():
+        known_codes = set(store.all_codes())
+        for text, detections in zip(texts, found):
+            result = _pseudonymize(text, detections, store, known_codes)
+            # A code issued for an earlier text counts as known for later ones.
+            known_codes.update(code for *_, code in result.spans)
+            results.append(result)
     return results
 
 

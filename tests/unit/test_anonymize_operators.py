@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -37,6 +38,10 @@ class InMemoryMappingStore(MappingStore):
 
     def all_codes(self) -> dict[str, str]:
         return dict(self._code_to_value)
+
+    def transaction(self):
+        # Nothing to lock or save; the real one would lock "unused.lock".
+        return nullcontext()
 
 
 def test_get_anonymizer_engine_is_a_singleton():

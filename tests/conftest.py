@@ -47,3 +47,21 @@ def _block_os_credential_store(request, monkeypatch):
 
     for name in ("get_password", "set_password", "delete_password", "get_credential"):
         monkeypatch.setattr(keyring, name, _refuse)
+
+
+@pytest.fixture
+def fake_keyring(monkeypatch):
+    """An in-memory stand-in for the OS credential store, for tests of code
+    that looks keys up by path (MappingStore without an explicit key,
+    redact-key). Returns the backing dict: {(service, username): secret}."""
+    secrets: dict[tuple[str, str], str] = {}
+
+    def delete_password(service, username):
+        secrets.pop((service, username))
+
+    monkeypatch.setattr(keyring, "get_password", lambda service, username: secrets.get((service, username)))
+    monkeypatch.setattr(
+        keyring, "set_password", lambda service, username, secret: secrets.__setitem__((service, username), secret)
+    )
+    monkeypatch.setattr(keyring, "delete_password", delete_password)
+    return secrets
