@@ -178,7 +178,7 @@ Masked when detected, with any context requirement:
 
 | Entity type | Detected when |
 |---|---|
-| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes). See the gaps below. |
+| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`). |
 | `IN_PAN` | A valid-shape PAN: the 4th character is a holder type (P, C, H, F, A, T, B, L, J, G). `ABCDE1234F` is **not** a valid PAN and is never detected, so don't use it in tests; use e.g. `ABCPE1234F`. |
 | `IN_AADHAAR` | 12 digits with a valid Verhoeff checksum. No context needed. |
 | `EMAIL_ADDRESS`, `IFSC`, `IN_GSTIN`, `IN_VEHICLE_REGISTRATION`, `DRIVING_LICENSE`, `TAN`, `CIN`, `CREDIT_CARD` (Luhn-valid), `AIS_DOWNLOAD_ID`, `DEMAT_DP_ID` (NSDL `IN` + 14 digits) | Format match, no context needed (each checked). |
@@ -187,7 +187,7 @@ Masked when detected, with any context requirement:
 | `BANK_ACCOUNT_NUMBER` | 9–18 digits **near "account", "acc" or "bank"** |
 | `EPF_UAN`, `CKYC_NUMBER`, `MF_FOLIO_NUMBER`, `RATION_CARD_NUMBER`, `ITR_ACK_NUMBER`, `DEMAT_DP_ID` (CDSL form) | The number **near its context word** (uan/epf, ckyc/kyc, folio, ration/card, itr/acknowledgement, demat/dp) |
 | `IN_DATE_OF_BIRTH` | A date **near "dob", "birth" or "born"**. Other dates are never masked. |
-| `IN_ADDRESS` | Text **near the word "address"** only. |
+| `IN_ADDRESS` | Text **near the word "address"**, **or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. |
 | `PHONE_NUMBER` | **Only near "phone", "mobile", "telephone", "cell" or "number"**. See the gaps below. |
 
 **Not masked** (checked on synthetic sentences; the model sees these in the
@@ -201,23 +201,29 @@ clear):
 - **Passport numbers, even next to "passport"**: Presidio's passport pattern
   tops out at 0.45 with context, below the 0.5 threshold, so `IN_PASSPORT`
   is effectively never masked.
-- **Addresses without the word "address"**, e.g.
-  `12 MG Road, Indiranagar, Bengaluru 560038`.
+- **Addresses with neither a PIN code nor the word "address"**, e.g.
+  `12 MG Road, Indiranagar` (no PIN). Multi-line addresses (letterheads)
+  are masked only on the line that carries the PIN code.
 - **Place names, organizations and employers**: `Pune`, `Infosys`.
 - **Plain dates and times**, apart from a date of birth with its context
   word.
 - **Money, salaries and amounts**: `12,50,000`.
 - **Medical terms and conditions, age, gender, religion, caste, job
   titles, relations.**
-- **Names NER misses.** In the probes, all caps with initials after a
-  title left the initial behind (`MR. R RAJESH KUMAR` → `MR. R PERSON_B`),
-  and names run together in one word are missed.
+- **Names NER misses when there's no title.** Examples: names run
+  together in one word, and spaCy mis-spans such as
+  `PRIYA SHARMA W/O RAJESH`, where only "SHARMA W/O" is tagged and PRIYA
+  and RAJESH stay in the clear.
 - **Bare numbers with no context word**, such as an account number without
   "account".
 
-**Approved, not yet built:** two detection improvements, all-caps names
-after a title and PIN-code-anchored addresses. **Proposed, awaiting a
-decision:** see DECISIONS.md step 7.
+**False positives, known and accepted (the safe direction):**
+- Product names after "MR" (`MR Plus`).
+- A leading phrase swept into an address (`Send it to 12 MG Road, …`).
+- spaCy tagging some capitalized words as names (`DR NEFT`, `Ms Excel`).
+
+**Proposed, awaiting a decision** (phone numbers without context,
+passport numbers, field-name context for tables): see DECISIONS.md step 7.
 
 ## 6. Latency and the hook timeout
 

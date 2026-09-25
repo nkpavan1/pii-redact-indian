@@ -27,7 +27,7 @@ from __future__ import annotations
 from presidio_analyzer import PatternRecognizer
 
 from pii_redact.detect.recognizers.aadhaar_checksum import AadhaarChecksumRecognizer
-from pii_redact.detect.recognizers.address import AddressRecognizer
+from pii_redact.detect.recognizers.address import AddressRecognizer, PinCodeAddressRecognizer
 from pii_redact.detect.recognizers.ais import AisDownloadIdRecognizer
 from pii_redact.detect.recognizers.banking import (
     BankAccountNumberRecognizer,
@@ -47,6 +47,7 @@ from pii_redact.detect.recognizers.other_documents import (
     ItrAcknowledgementRecognizer,
     RationCardNumberRecognizer,
 )
+from pii_redact.detect.recognizers.salutation_names import SalutationNameRecognizer
 
 AADHAAR_REPLACEMENT_ENTITY = "IN_AADHAAR"
 
@@ -55,6 +56,8 @@ def get_custom_recognizers() -> list[PatternRecognizer]:
     return [
         AadhaarChecksumRecognizer(),
         AddressRecognizer(),
+        PinCodeAddressRecognizer(),
+        SalutationNameRecognizer(),
         AisDownloadIdRecognizer(),
         DateOfBirthRecognizer(),
         TanRecognizer(),

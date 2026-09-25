@@ -276,13 +276,18 @@ docstring, not silently missing):
   source's actual line endings (a `csv.Sniffer` quirk, not a choice) — see
   `render/csv_.py`.
 - **spaCy's NER misses all-caps, initial-abbreviated names** (e.g.
-  `"MR. R RAJESH KUMAR"` — zero PERSON detections, confirmed via direct
-  `analyzer.analyze()` probe, not a pipeline bug). No mitigation
-  implemented; a real gap on documents that print names this way.
+  `"MR. R RAJESH KUMAR"`: zero PERSON detections, confirmed via direct
+  `analyzer.analyze()` probe, not a pipeline bug).
+  - Mitigated in 0.2.0 for the common case: `SalutationNameRecognizer`
+    catches any name after a title (Mr, Shri, Smt, Dr., ...).
+  - Untitled all-caps names still depend on spaCy.
 - **`AddressRecognizer` (see the sixth gap above) only fires near the
-  literal word "address"** — a document whose label is e.g. "Customer
-  Details" instead never triggers it even though the same free-text
-  address block is present. Confirmed on `IntStatement.pdf`.
+  literal word "address".** A document whose label is e.g. "Customer
+  Details" never triggers it, even though the same free-text address block
+  is present. Confirmed on `IntStatement.pdf`.
+  - Mitigated in 0.2.0: `PinCodeAddressRecognizer` catches any address
+    ending in a PIN code.
+  - A multi-line letterhead address is still masked only on its PIN line.
 - **Overlapping detections of different entity types at the exact same
   span pick one label somewhat arbitrarily (highest score wins)** — e.g.
   a 14-digit account number matches `PHONE_NUMBER`, `BANK_ACCOUNT_NUMBER`,
@@ -308,7 +313,7 @@ What was decided, and what is knowingly left open, is logged step by step
 in [DECISIONS.md](DECISIONS.md). The service contract and measured latency
 are in [HANDOFF.md](HANDOFF.md).
 
-Run `pytest` to see what's covered today (426 tests as of 0.2.0, one of
+Run `pytest` to see what's covered today (459 tests as of 0.2.0, one of
 them opt-in: `PII_REDACT_KEYRING_TESTS=1` runs the single test that uses
 the real OS credential store; every other test is blocked from touching
 it).

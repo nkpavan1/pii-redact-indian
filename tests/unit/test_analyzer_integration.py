@@ -284,12 +284,24 @@ def test_ais_download_id_does_not_also_fire_as_in_pan(analyzer):
 # recognizers target unstructured postal addresses.
 
 
-def test_bare_address_has_no_context_and_is_not_detected(analyzer):
+def test_bare_address_without_a_pin_code_needs_context(analyzer):
+    # The free-text AddressRecognizer still only fires near "address".
+    from pii_redact.detect.analyzer import SCORE_THRESHOLD
+
+    address = "B-204, SUNRISE APARTMENTS,MAIN ROAD,RAMPUR H.O,RAMPUR,BHOPAL,MADHYA PRADESH"
+    results = analyzer.analyze(text=address, language="en", score_threshold=SCORE_THRESHOLD)
+    assert not any(r.entity_type == "IN_ADDRESS" for r in results)
+
+
+def test_bare_address_ending_in_a_pin_code_is_detected_without_context(analyzer):
+    # Changed in 0.2.0 (approved): a PIN code anchors an address on its own,
+    # via PinCodeAddressRecognizer. This used to be a documented miss.
     from pii_redact.detect.analyzer import SCORE_THRESHOLD
 
     address = "B-204, SUNRISE APARTMENTS,MAIN ROAD,RAMPUR H.O,RAMPUR,BHOPAL,462001,MADHYA PRADESH"
     results = analyzer.analyze(text=address, language="en", score_threshold=SCORE_THRESHOLD)
-    assert not any(r.entity_type == "IN_ADDRESS" for r in results)
+    spans = [(r.start, r.end) for r in results if r.entity_type == "IN_ADDRESS"]
+    assert (0, len(address)) in spans
 
 
 def test_address_detected_via_context_window(analyzer):

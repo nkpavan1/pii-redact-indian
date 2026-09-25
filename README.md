@@ -279,11 +279,14 @@ code, not just here:
     never masked.
   - Several identifiers are masked only with a context word nearby: phone
     numbers ("phone", "mobile", "number"), bank account numbers, UPI IDs,
-    voter IDs, addresses ("address") and dates of birth.
+    voter IDs and dates of birth.
+  - Addresses are masked when they end in a PIN code or sit near the word
+    "address".
   - Passport numbers are effectively never masked: Presidio's passport
     pattern can't reach the 0.5 threshold even next to the word
     "passport".
-  - All-caps names with initials after a title leave the initial behind.
+  - Names after a title (Mr, Shri, Smt, Dr., ...) are caught even in all
+    caps with initials; untitled names depend on spaCy.
 - **Latency.** NER costs roughly 0.17 s per 1K tokens of new text.
   `redact-service` caches repeated texts. See HANDOFF.md, section 6.
 - **Structured data (CSV/XLSX/JSON) has no sentence context** (PDF/image

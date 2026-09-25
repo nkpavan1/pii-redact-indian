@@ -24,6 +24,7 @@ assumed.
 
 from __future__ import annotations
 
+import regex
 from presidio_analyzer import Pattern, PatternRecognizer
 
 
@@ -56,4 +57,76 @@ class AddressRecognizer(PatternRecognizer):
             patterns=self.PATTERNS,
             context=self.CONTEXT,
             name="AddressRecognizer",
+        )
+
+
+# --- PIN-code-anchored addresses (no "address" label needed)
+#
+# An Indian address almost always ends in a 6-digit PIN code (first digit
+# 1-9, sometimes written "560 038"). Anchoring on it finds addresses that
+# have no "address" label nearby - the common case in chat ("send it to 12
+# MG Road, Indiranagar, Bengaluru 560038") and in letterheads.
+#
+# Pieces:
+# - a word is an address token: "B-204", "No.12", "#12", "H.O", "3rd".
+# - a segment is 1-6 such words ending in a comma: "12 MG Road,".
+# - the place is 1-4 words right before the PIN (city/state).
+# - an optional trailing state or country in capitals after the PIN.
+# Case matters for that last part, so these patterns are compiled without
+# Presidio's default IGNORECASE.
+#
+# The place right before the PIN must start with a capital letter (a city
+# or state), which keeps ordinary sentences ending in a 6-digit number
+# ("..., and the fee is 450000") out.
+#
+# Known behavior, accepted (the safe direction): a leading phrase can be
+# swept into the first segment ("Send it to 12 MG Road, ..." takes "Send it
+# to" too - up to six words), and "Word - 123456" matches for capitalized
+# words not on the banking list below.
+_PIN = r"(?<!\d)(?<!\d[.,])[1-9]\d{2}[ \t]?\d{3}(?![\d,]?\d)"
+_ADDRESS_WORD = r"[\w#/.'&()\-]+"
+_SEGMENT = rf"{_ADDRESS_WORD}(?:[ \t]+{_ADDRESS_WORD}){{0,5}}[ \t]*,[ \t]*"
+_PLACE = rf"[A-Z][\w.'\-]*(?:[ \t]+{_ADDRESS_WORD}){{0,3}}"
+_TRAILING_REGION = r"(?:[ \t]*,[ \t]*[A-Z][A-Za-z]+(?:[ \t]+[A-Z][A-Za-z]+){0,2}(?![A-Za-z]))?"
+# Transaction prefixes that are followed by a dash and 6 digits on bank
+# statements, and must not be read as "City - PIN".
+_NOT_PLACES = r"(?i:neft|imps|rtgs|upi|atm|pos|chq|cheque|ref|txn|inv|invoice|order|id|no|emi|otp)"
+
+
+class PinCodeAddressRecognizer(PatternRecognizer):
+    """IN_ADDRESS anchored on a PIN code.
+
+    - "12 MG Road, Indiranagar, Bengaluru 560038" (segments + place + PIN):
+      0.6, masked with no context word.
+    - "BHOPAL - 462001" (a place, a dash, a PIN - one line of a letterhead):
+      0.5, masked; banking prefixes (NEFT-..., IMPS-...) excluded.
+    - "PIN 560038" / "pincode is 560038": 0.5, the number only.
+    The existing AddressRecognizer still handles labeled addresses."""
+
+    PATTERNS = [
+        Pattern(
+            "Address ending in a PIN code",
+            rf"(?<![\w#/.'&()\-])(?:{_SEGMENT}){{1,6}}{_PLACE}[ \t]*[-,]?[ \t]*{_PIN}{_TRAILING_REGION}",
+            0.6,
+        ),
+        Pattern(
+            "Place - PIN code",
+            rf"(?<![\w#/.'&()\-])(?!{_NOT_PLACES}\b)[A-Za-z]{{3,}}(?:[ \t]+[A-Za-z]{{3,}}){{0,2}}[ \t]*-[ \t]*{_PIN}",
+            0.5,
+        ),
+        Pattern(
+            "PIN code",
+            # The keyword stays in the text ("pincode is IN_ADDRESS_A");
+            # only the number is matched.
+            rf"(?<=(?i:\bpin[ \t]*(?:code)?(?:[ \t]+(?:is|no\.?|number))?)[ \t]*[:.\-]?[ \t]*){_PIN}",
+            0.5,
+        ),
+    ]
+
+    def __init__(self):
+        super().__init__(
+            supported_entity="IN_ADDRESS",
+            patterns=self.PATTERNS,
+            name="PinCodeAddressRecognizer",
+            global_regex_flags=regex.MULTILINE,
         )

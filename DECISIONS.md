@@ -412,3 +412,70 @@ Warm-up took 0.8 s with the model files in the OS file cache. A cold start
 
 **Approved and built next (step 8):** all-caps names after a title, and
 PIN-code-anchored addresses.
+
+- **Found through a flaky test: stale compiled test files.** A traceback
+  pointed at the old working copy. The clone's `__pycache__` folders had
+  been copied along with the source, and pytest reuses a cached compiled
+  file whenever the source's mtime and size match. The code was identical,
+  so no result was wrong, but the paths were misleading. The (untracked)
+  `__pycache__` folders were deleted; they rebuild automatically.
+
+## Step 8: names after a title, addresses anchored on a PIN code (approved B8)
+
+**Decisions**
+- **`SalutationNameRecognizer`** (entity `PERSON`, score 0.85, the same as
+  spaCy's PERSON):
+  - A name is 0–3 initials, then 1–3 capitalized words, with an optional
+    middle or trailing initial, after Mr, Mrs, Miss, Shri, Sri, Smt, Kumari
+    or Kum (period optional), or after "Dr." or "Ms." (period required).
+  - The title is **not** part of the match (a variable-width lookbehind;
+    Presidio compiles with the `regex` package, which supports it), so the
+    output reads `MR. PERSON_A` and reversal restores just the name.
+  - The false-positive guards are each tied to something observed:
+    - a bare `DR` is the debit marker on bank statements, and `MS Excel`
+      is not a person, so those two need the period;
+    - a stop list (ACCOUNT, SAVINGS, BANK, ...) ends a name, so
+      `MR RAJESH KUMAR SAVINGS ACCOUNT` stops before `SAVINGS`;
+    - a trailing initial may not be followed by `/`, so the `W` of `W/O`
+      isn't taken.
+- **`PinCodeAddressRecognizer`** (entity `IN_ADDRESS`). A PIN code is 6
+  digits, first digit 1–9, optionally written `560 038`, with no digit
+  before it directly or through a comma. Three patterns:
+  - comma-separated segments + a capitalized place + PIN, optionally
+    followed by a capitalized state: 0.6;
+  - `Place - PIN`, excluding banking prefixes (NEFT, IMPS, RTGS, UPI, ATM,
+    POS, CHQ, REF, TXN, INV, ORDER, ID, NO, EMI, OTP): 0.5;
+  - the number alone after `PIN`/`pincode (is|no.|number)`, with the
+    keyword kept visible: 0.5.
+  - The place before the PIN must start with a capital letter. That rule
+    was added after a probe turned `"..., and the fee is 450000"` into an
+    address.
+- **Flags.** Both recognizers are compiled **without** Presidio's default
+  IGNORECASE (a name or place is known by its capital letter); the titles
+  and keywords are case-insensitive groups.
+- **Test change.** One existing test asserted the old gap (a bare address
+  with a PIN code was *not* detected). It now asserts detection, plus a
+  new test that an address with no PIN still needs "address" context.
+- **No latency cost.** Re-benchmarked: 12K tokens 2.06 s and 50K tokens
+  8.82 s at p50, the same as before.
+
+**Gaps and caveats**
+- **Known false positives (the safe direction):**
+  - product names after "MR" (`MR Plus`);
+  - up to six leading words swept into an address (`Send it to 12 MG
+    Road, ...`);
+  - a comma phrase ending in a capitalized word and any 6-digit number
+    (`..., Pune 411001` is intended, but so is
+    `Total, Balance 123456`);
+  - `Word - 123456` for words not on the banking list.
+- **Different codes for the same person.** `R RAJESH KUMAR` (titled) and
+  `RAJESH KUMAR` (untitled, from spaCy) are different lookup keys, so the
+  same person can get two codes across documents.
+- **Letterhead addresses.** A multi-line address is masked only on its
+  PIN line. Expanding to the lines above was designed but not approved.
+- **Untitled names are still spaCy's call.** A spaCy mis-span such as
+  `PRIYA SHARMA W/O RAJESH` (it tags only "SHARMA W/O") leaves PRIYA and
+  RAJESH in the clear. That behavior predates this work and is noted in
+  HANDOFF.md.
+- **Still awaiting a decision:** phone numbers without context, passport
+  numbers, and field-name context (step 7 proposals).

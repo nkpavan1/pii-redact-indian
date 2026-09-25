@@ -36,6 +36,13 @@ The design decisions and known gaps behind each change are in
   - `create=False`, which refuses to start a new store silently;
   - `lock_timeout`, `refresh()` and `keyed_digest()`.
 - `scripts/bench_service.py` latency benchmark.
+- **Names after a title** (Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, Dr.,
+  Ms.), including the all-caps-with-initials names spaCy misses entirely
+  (`MR. R RAJESH KUMAR` → `MR. PERSON_A`).
+- **Addresses anchored on a PIN code**, with no "address" label needed
+  (`12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`,
+  `pincode is 560038`). Banking prefixes (`NEFT-123456`) and amounts are
+  excluded.
 
 ### Changed
 - **Reversal returns the display form.** Codes reverse to the surface form
