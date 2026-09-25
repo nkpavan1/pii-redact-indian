@@ -11,12 +11,14 @@ Everything here touches Credential Manager or ACLs, so it's the user's to
 run. Nothing in this repo runs it.
 
 ```powershell
+$redactKey = "H:\ai\engines\pii-redact\.venv\Scripts\redact-key.exe"
+
 # 1. Create the one shared store and its key (key -> Windows Credential Manager).
-redact-key init --store H:\ai\redaction\mapping_store.enc
+& $redactKey init --store H:\ai\redaction\mapping_store.enc
 
 # 2. Back the key up to the password manager (not added to clipboard history
 #    or cloud sync; the clipboard is cleared when you press Enter).
-redact-key export --store H:\ai\redaction\mapping_store.enc --clip --i-understand
+& $redactKey export --store H:\ai\redaction\mapping_store.enc --clip --i-understand
 
 # 3. Create the service token: 32 random bytes as base64 (44 characters),
 #    readable only by you.
@@ -27,7 +29,7 @@ Remove-Variable bytes
 icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:(R,W)"
 
 # 4. Check: key present, store decrypts (never shows the key).
-redact-key check --store H:\ai\redaction\mapping_store.enc
+& $redactKey check --store H:\ai\redaction\mapping_store.enc
 ```
 
 - **Same Windows user.** The key is bound to the store's resolved path and
@@ -43,14 +45,21 @@ redact-key check --store H:\ai\redaction\mapping_store.enc
 **Start** (from `start-stack.ps1`, before LiteLLM):
 
 ```powershell
-& "F:\claude\projects\redaction tool\.venv\Scripts\python.exe" -m pii_redact.service `
+& "H:\ai\engines\pii-redact\.venv\Scripts\python.exe" -m pii_redact.service `
     --port 8787 --home H:\ai\redaction --pid-file H:\ai\redaction\service.pid
 ```
 
-- **Which venv.** That is the venv this build is installed into today (an
-  editable install of `F:\Github Repos\pii-redact-indian`). If the venv is
-  recreated inside the clone (`setup.ps1` there), the path becomes
-  `F:\Github Repos\pii-redact-indian\.venv\Scripts\python.exe`.
+- **Interpreter.** `H:\ai\engines\pii-redact\.venv` is on the NVMe drive.
+  - It holds an editable install of `F:\Github Repos\pii-redact-indian`, the
+    package versions the test suite passed with (pinned), and the spaCy
+    model `en_core_web_lg` 3.8.0.
+  - The whole suite passes under it.
+  - The old venv in `F:\claude\projects\redaction tool\.venv` still works,
+    but is deprecated; the user deletes it once the stack is switched.
+- **Code changes need no reinstall.** It's an editable install, so a
+  `git pull` in the clone takes effect on the next service start. A new
+  dependency (a change to `pyproject.toml`) needs
+  `H:\ai\engines\pii-redact\.venv\Scripts\python.exe -m pip install -e "F:\Github Repos\pii-redact-indian"`.
 - **Defaults.** `--home` defaults to `$env:PII_REDACT_HOME`, else
   `H:\ai\redaction`. The token file defaults to `<home>\service.token`.
 - **Logs go to stderr.** Redirect them if you want a file; they never
@@ -70,14 +79,23 @@ redact-key check --store H:\ai\redaction\mapping_store.enc
 |---|---|---|
 | not running / not yet bound | connection refused | — |
 | warming up | 503 | `{"status": "starting", "ready": false}` |
-| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "version": "0.2.0"}` |
+| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "version": "0.3.0"}` |
 | warm-up failed (exits right after) | 503 | `{"status": "failed", "ready": false}` |
 
 **Readiness wait for `start-stack.ps1`:** poll `/health` every 1 s until
-`ready: true`, for **up to 120 s**, before starting LiteLLM. A warm start
-(model files in the OS cache) is ready in about 1.5 s, but the first start
-after boot reads the ~600 MB spaCy model from disk. `/health` never waits
-on the redaction lock, so it answers even during a long request.
+`ready: true`, for **up to 120 s**, before starting LiteLLM.
+- **Warm start:** the imports and the model load take 1.5 s (model files
+  in the OS cache, measured from the H: venv).
+- **Cold start:** the first start after boot reads the 425 MB model from
+  the NVMe drive. **To be measured by the user after a reboot**:
+  ```powershell
+  & "F:\Github Repos\pii-redact-indian\scripts\measure_cold_start.ps1"
+  ```
+  It prints the seconds from launch to `ready: true`. That needs section 1
+  done; `-ModelOnly` times just the imports and model load. The 120 s
+  budget stands until that number is in (see DECISIONS.md step 11).
+- `/health` never waits on the redaction lock, so it answers even during a
+  long request.
 
 **Stop:**
 

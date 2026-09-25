@@ -17,9 +17,15 @@ section 5).
   left-hand labels, and JSON keys now count as context for their values.
   An account number under "Account No" or "A/C No" is masked.
 
+- `scripts/measure_cold_start.ps1`: the time from launching the service
+  to `/health` reporting ready.
+
 ### Changed
 - **Ration card numbers must contain a digit.** Words like "Narration" or
   "Registration" were being masked as ration card numbers.
+- **Runtime venv.** The recommended one is now
+  `H:\ai\engines\pii-redact\.venv`, on the NVMe drive with pinned package
+  versions (HANDOFF.md, section 2).
 - **Phone lookup keys** drop a `+91`/`91`/`0` prefix from Indian mobile
   numbers.
 

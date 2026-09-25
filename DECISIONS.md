@@ -601,3 +601,43 @@ and no person-label word. Not done.
   is on hold.
 - **Uninformative labels add nothing.** A label with no context words in
   it ("Value", "Field 3") changes nothing; that's harmless.
+
+## Step 11: runtime venv on the NVMe drive
+
+**Decisions** (the user approved writing under `H:\ai\engines`, and
+reusing the installed model instead of downloading it)
+- **The venv.** `H:\ai\engines\pii-redact\.venv`, created from the same
+  base Python as before: Python 3.10.11, via the Microsoft Store Python's
+  app-execution-alias folder, which stays stable across Store updates. It's
+  the only Python on the machine.
+- **Pinned versions.** Installed as `pip install -c <constraints> -e
+  "F:\Github Repos\pii-redact-indian[dev]"`, where the constraints are the
+  old venv's exact versions (76 packages, including presidio 2.2.364,
+  spacy 3.8.15, regex 2026.7.19). A fresh resolve could have pulled newer
+  Presidio or spaCy releases, whose detection the suite never saw. The
+  `dev` extras (pytest) are included, so the suite can run from this
+  interpreter.
+- **The model.** `en_core_web_lg` 3.8.0 was **copied** from the old venv
+  (package plus dist-info) instead of downloaded again. `spacy.load` works,
+  `pip show` lists it, and `pip check` is clean.
+- **Verified.** The full suite passes under the new interpreter (526
+  passed, 1 opt-in skipped). All four console scripts are present.
+  Imports plus model load take 1.5 s warm.
+- **The old venv** in `F:\claude\projects\redaction tool\.venv` is left
+  untouched and still works (it also has the clone installed in editable
+  mode). The user deletes it once the stack has switched.
+- **HANDOFF.md updated.** Section 2 has the new interpreter path; section
+  1's `redact-key` commands now name the new venv's `redact-key.exe`
+  explicitly (a bare `redact-key` only works in an activated venv).
+- **`scripts/measure_cold_start.ps1`** starts the service on port 8799 (so
+  it can't clash with a running one), polls `/health` until
+  `ready: true`, prints the seconds taken, and stops the service again.
+  `-ModelOnly` needs no store or token.
+
+**Open, for the user**
+- **Measure one real cold start after a reboot,** after HANDOFF section 1:
+  `F:\Github Repos\pii-redact-indian\scripts\measure_cold_start.ps1`.
+  Record the number here and confirm the 120 s budget. It can't be
+  measured in this session: the full run opens the real store, which
+  means a Credential Manager lookup, and a true cold start needs a reboot.
+  The 1.5 s warm figure says little about a cold read of the 425 MB model.
