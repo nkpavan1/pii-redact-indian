@@ -95,7 +95,21 @@ def normalize_value(entity_type: str, raw_value: str) -> str:
     if entity_type in {"PERSON"}:
         return collapsed_whitespace.upper()
     # IDs/numbers: strip internal separators as well as surrounding whitespace.
-    return re.sub(r"[\s-]", "", collapsed_whitespace).upper()
+    key = re.sub(r"[\s-]", "", collapsed_whitespace).upper()
+    if entity_type == "PHONE_NUMBER":
+        return _indian_mobile_key(key)
+    return key
+
+
+_INDIAN_MOBILE_KEY = re.compile(r"(?:\+?91|0)?([6-9]\d{9})")
+
+
+def _indian_mobile_key(key: str) -> str:
+    """"+919876543210", "919876543210" and "09876543210" are the same Indian
+    mobile number as "9876543210", so they share its key (and code). Any
+    other phone number keeps the key it always had."""
+    match = _INDIAN_MOBILE_KEY.fullmatch(key)
+    return match.group(1) if match else key
 
 
 def _letter_suffix(n: int) -> str:

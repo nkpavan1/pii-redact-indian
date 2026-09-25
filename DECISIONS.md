@@ -479,3 +479,66 @@ PIN-code-anchored addresses.
   HANDOFF.md.
 - **Still awaiting a decision:** phone numbers without context, passport
   numbers, and field-name context (step 7 proposals).
+
+---
+
+# Review round 2 (stack session review of 0.2.0)
+
+The stack session accepted the 0.2.0 contract and approved the step 7
+proposals. Steps 9–12 below; the contract is unchanged (see step 12).
+
+## Step 9: Indian mobile numbers without context (chat only), passport numbers
+
+**Decisions**
+- **Mobile numbers.** A new `IndianMobileRecognizer`:
+  - Pattern: optional `+91`/`91`/`0`, then `[6-9]` and 9 more digits,
+    either contiguous or split 5-5 by a space or hyphen.
+  - Score 0.6, so it passes 0.5 with no context.
+  - Context words (as lemmas): mobile, phone, number, whatsapp, contact,
+    ph, tel, reach, call.
+- **Chat only, through an internal entity type.**
+  - Allow-lists select by entity type, and every allow-list has
+    `PHONE_NUMBER`, so the recognizer emits `IN_MOBILE`, which **only** the
+    `chat` allow-list requests.
+  - `detect_in_block` reports it as `PHONE_NUMBER`. Codes and entity counts
+    are unchanged for callers, and a number that Presidio's own phone
+    recognizer also catches ("mobile 98…") gets one code, not a second
+    `IN_MOBILE_A`.
+  - `detect_in_block` now also keeps one detection per (type, span),
+    keeping the highest score, so double-caught spans aren't counted twice
+    in previews.
+- **One code per mobile number.** The `PHONE_NUMBER` lookup key now drops
+  a `+91`/`91`/`0` prefix from Indian mobiles: `+91 98765 43210`,
+  `098765 43210` and `9876543210` share one key and one code. Other phone
+  numbers keep the key they always had.
+- **False-positive guards,** each tested:
+  - no letter, digit, `+` or `/` directly before, and no letter or digit
+    directly after, so not inside longer digit runs, `TXN9876543210` or
+    `UPI/9876543210/`;
+  - no digit before through a comma or period, and no `.digit` after, so
+    not inside amounts (`12,50,000`, `9,876,543,210`, `9876543210.50`).
+- **Passports: replaced, not stacked.** Presidio's `InPassportRecognizer`
+  was **replaced** by `PassportNumberRecognizer`: letter + 7 digits, base
+  0.15, reaching 0.5 with "passport" nearby. Replacing it rather than
+  adding a second recognizer makes double-firing impossible: the registry
+  now has exactly one `IN_PASSPORT` recognizer (tested). Presidio's
+  version had two problems:
+  - it could never reach the threshold (0.1 + context = 0.45);
+  - its pattern demanded the 2nd and last digits be 1–9, which would
+    silently miss numbers such as `J8369850`.
+
+**Gaps and caveats**
+- **Known false positive (safe direction):** in chat, any standalone
+  10-digit number starting 6–9 is a mobile. So `account 9876543210` is
+  masked as `PHONE_NUMBER` (it scores higher than
+  `BANK_ACCOUNT_NUMBER`).
+- **Still need a context word:** landlines (`080-23456789`) and non-Indian
+  numbers (`+1 555 010 0199`). "call" still doesn't lift Presidio's phone
+  recognizer.
+- **Key change for existing entries.** An existing store entry for a
+  `+91…` or `0…` form of a mobile keeps its old key. A later sighting of
+  the same number gets the new canonical key and so a new code. That's a
+  one-time split, and only for the legacy `redact` store; the Phase 7 store
+  isn't created yet.
+- **Documents are unchanged,** as required: no `IN_MOBILE` in any
+  document allow-list (tested).

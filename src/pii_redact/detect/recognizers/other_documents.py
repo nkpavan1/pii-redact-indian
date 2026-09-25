@@ -43,6 +43,40 @@ class DrivingLicenseRecognizer(PatternRecognizer):
         )
 
 
+class PassportNumberRecognizer(PatternRecognizer):
+    """Detects: Indian passport number, one letter + 7 digits (an optional
+    space after the third character, as Presidio allows). Context-scoped
+    like this project's other bare-format IDs: 0.15 alone, 0.5 with
+    "passport" nearby.
+
+    REPLACES Presidio's InPassportRecognizer (see detect/analyzer.py's
+    _INDIA_BUILTINS), for two reasons found by probing:
+    - it scores 0.1, so even next to "passport" it reached only 0.45 -
+      below the 0.5 threshold, i.e. IN_PASSPORT could never be masked;
+    - its pattern requires the 2nd and last characters to be 1-9, so a
+      passport number with a 0 in either place would be silently missed.
+    Replacing rather than stacking means the same span can never be
+    reported twice. Named so it can't collide with Presidio's class name
+    (see recognizers/__init__.py for why that matters)."""
+
+    PATTERNS = [
+        Pattern(
+            "Passport number (context required)",
+            r"\b[A-Z]\d{2}\s?\d{5}\b",
+            0.15,
+        )
+    ]
+    CONTEXT = ["passport"]
+
+    def __init__(self):
+        super().__init__(
+            supported_entity="IN_PASSPORT",
+            patterns=self.PATTERNS,
+            context=self.CONTEXT,
+            name="PassportNumberRecognizer",
+        )
+
+
 class ItrAcknowledgementRecognizer(PatternRecognizer):
     """Detects: Income Tax Return acknowledgement number. FP/FN risk: HIGH -
     format has changed across assessment years (historically a 15-digit

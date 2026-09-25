@@ -188,19 +188,15 @@ Masked when detected, with any context requirement:
 | `EPF_UAN`, `CKYC_NUMBER`, `MF_FOLIO_NUMBER`, `RATION_CARD_NUMBER`, `ITR_ACK_NUMBER`, `DEMAT_DP_ID` (CDSL form) | The number **near its context word** (uan/epf, ckyc/kyc, folio, ration/card, itr/acknowledgement, demat/dp) |
 | `IN_DATE_OF_BIRTH` | A date **near "dob", "birth" or "born"**. Other dates are never masked. |
 | `IN_ADDRESS` | Text **near the word "address"**, **or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. |
-| `PHONE_NUMBER` | **Only near "phone", "mobile", "telephone", "cell" or "number"**. See the gaps below. |
+| `PHONE_NUMBER` | **Indian mobile numbers with no context needed** (chat only): an optional `+91`/`91`/`0`, then 6–9 and 9 more digits, as `9876543210`, `98765 43210`, `98765-43210`, `+91 98765 43210`. All forms of one number get **one code**. Any other phone number (landlines, non-Indian numbers) only near "phone", "mobile", "telephone", "cell" or "number". |
+| `IN_PASSPORT` | One letter + 7 digits (`M1234567`, `M12 34567`) **near "passport"**. |
 
 **Not masked** (checked on synthetic sentences; the model sees these in the
 clear):
-- **Phone numbers without one of those words nearby**: `9876543210`,
-  `call me on 9876543210`, `reach me at +91 98765 43210`,
-  `whatsapp 9876543210`, `contact 9876543210` and `ph 9876543210` all
-  passed through, while `my number is 9876543210` was masked. "call" did
-  not boost the score in testing.
-- **UPI IDs and voter IDs without their context word.**
-- **Passport numbers, even next to "passport"**: Presidio's passport pattern
-  tops out at 0.45 with context, below the 0.5 threshold, so `IN_PASSPORT`
-  is effectively never masked.
+- **Landlines and non-Indian phone numbers without a context word**:
+  `080-23456789`, `+1 555 010 0199`, and `call +44 20 7946 0958` ("call"
+  doesn't lift Presidio's phone recognizer).
+- **UPI IDs, voter IDs and passport numbers without their context word.**
 - **Addresses with neither a PIN code nor the word "address"**, e.g.
   `12 MG Road, Indiranagar` (no PIN). Multi-line addresses (letterheads)
   are masked only on the line that carries the PIN code.
@@ -221,9 +217,11 @@ clear):
 - Product names after "MR" (`MR Plus`).
 - A leading phrase swept into an address (`Send it to 12 MG Road, …`).
 - spaCy tagging some capitalized words as names (`DR NEFT`, `Ms Excel`).
-
-**Proposed, awaiting a decision** (phone numbers without context,
-passport numbers, field-name context for tables): see DECISIONS.md step 7.
+- Any standalone 10-digit number starting 6–9 is treated as a mobile in
+  chat. For example, `account 9876543210` is masked as `PHONE_NUMBER`
+  rather than `BANK_ACCOUNT_NUMBER`. Amounts with separators, numbers
+  inside longer digit runs, and references like `TXN9876543210` or
+  `UPI/9876543210/` are not matched.
 
 ## 6. Latency and the hook timeout
 

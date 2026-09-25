@@ -61,7 +61,6 @@ from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResu
 from presidio_analyzer.predefined_recognizers import (
     InGstinRecognizer,
     InPanRecognizer,
-    InPassportRecognizer,
     InVehicleRegistrationRecognizer,
     InVoterRecognizer,
 )
@@ -88,15 +87,27 @@ _CHUNK_BREAKS = ("\n\n", "\n", ". ", " ")
 
 # Presidio's India-specific built-ins that ship disabled (see module
 # docstring) - activated explicitly here, the same way a custom recognizer
-# is. InAadhaarRecognizer is deliberately excluded from this list: this
-# project's own AadhaarChecksumRecognizer replaces it (see below).
+# is. InAadhaarRecognizer and InPassportRecognizer are deliberately left
+# out: this project's AadhaarChecksumRecognizer and PassportNumberRecognizer
+# replace them (see recognizers/aadhaar_checksum.py and
+# recognizers/other_documents.py for why).
 _INDIA_BUILTINS = [
     InPanRecognizer,
-    InPassportRecognizer,
     InVoterRecognizer,
     InVehicleRegistrationRecognizer,
     InGstinRecognizer,
 ]
+
+# Entity types whose built-in recognizer is replaced, not stacked with a
+# custom one - two recognizers on one type would report the same span twice.
+_REPLACED_BUILTIN_ENTITIES = {AADHAAR_REPLACEMENT_ENTITY, "IN_PASSPORT"}
+
+# Entity types emitted by a recognizer but reported under another name.
+# IN_MOBILE exists only so that the `chat` allow-list alone can request the
+# context-free mobile recognizer (see recognizers/phone.py); to callers it
+# is a PHONE_NUMBER, so one number gets one code whichever recognizer found
+# it.
+_REPORTED_AS = {"IN_MOBILE": "PHONE_NUMBER"}
 
 
 def _build_registry() -> RecognizerRegistry:
@@ -106,12 +117,12 @@ def _build_registry() -> RecognizerRegistry:
     for recognizer_cls in _INDIA_BUILTINS:
         registry.add_recognizer(recognizer_cls())
 
-    # Defensive, not currently load-bearing: InAadhaarRecognizer isn't
-    # actually loaded by load_predefined_recognizers() today (see module
-    # docstring) - this guards against double-registration if a future
-    # presidio-analyzer release changes that default.
+    # Defensive, not currently load-bearing: neither replaced built-in is
+    # loaded by load_predefined_recognizers() today (see module docstring) -
+    # this guards against double-registration if a future presidio-analyzer
+    # release changes that default.
     for recognizer in list(registry.recognizers):
-        if AADHAAR_REPLACEMENT_ENTITY in recognizer.supported_entities:
+        if _REPLACED_BUILTIN_ENTITIES & set(recognizer.supported_entities):
             registry.remove_recognizer(recognizer.name)
 
     for custom_recognizer in get_custom_recognizers():
@@ -225,7 +236,10 @@ def detect_in_block(
     block_start = context_offset
     block_end = context_offset + len(block.text)
 
-    detections = []
+    # (entity_type, start, end) -> Detection; one per span and type, the
+    # highest score winning - two recognizers reporting the same span under
+    # the same (reported) type must not be counted twice.
+    detections: dict[tuple[str, int, int], Detection] = {}
     for r in results:
         r_end = r.end
         if r.entity_type == "PERSON":
@@ -236,14 +250,16 @@ def detect_in_block(
         end = min(r_end, block_end)
         if start >= end:
             continue  # no overlap with this block at all
-        detections.append(
-            Detection(
-                entity_type=r.entity_type,
-                start=start - context_offset,
-                end=end - context_offset,
-                score=r.score,
-                block_index=block_index,
-                location=block.location,
-            )
+        entity_type = _REPORTED_AS.get(r.entity_type, r.entity_type)
+        key = (entity_type, start - context_offset, end - context_offset)
+        if key in detections and detections[key].score >= r.score:
+            continue
+        detections[key] = Detection(
+            entity_type=entity_type,
+            start=key[1],
+            end=key[2],
+            score=r.score,
+            block_index=block_index,
+            location=block.location,
         )
-    return detections
+    return list(detections.values())

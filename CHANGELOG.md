@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+The HTTP contract is unchanged. Only what gets masked changes (HANDOFF.md,
+section 5).
+
+### Added
+- **Indian mobile numbers are masked in chat without a context word**
+  (`9876543210`, `98765 43210`, `+91 98765 43210`, ...), reported as
+  `PHONE_NUMBER`. Every format of one number gets one code. Document
+  allow-lists keep context-scoped phone detection.
+- **Passport numbers are masked next to "passport"**, via a new recognizer
+  that replaces Presidio's. Presidio's could never reach the threshold.
+
+### Changed
+- **Phone lookup keys** drop a `+91`/`91`/`0` prefix from Indian mobile
+  numbers.
+
 ## 0.2.0 (2026-09-25)
 
 Phase 7: the tool becomes the shared core of two new tools that share one

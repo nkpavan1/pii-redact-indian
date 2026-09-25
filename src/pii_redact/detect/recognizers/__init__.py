@@ -45,8 +45,10 @@ from pii_redact.detect.recognizers.kyc_and_scheme_ids import (
 from pii_redact.detect.recognizers.other_documents import (
     DrivingLicenseRecognizer,
     ItrAcknowledgementRecognizer,
+    PassportNumberRecognizer,
     RationCardNumberRecognizer,
 )
+from pii_redact.detect.recognizers.phone import IndianMobileRecognizer
 from pii_redact.detect.recognizers.salutation_names import SalutationNameRecognizer
 
 AADHAAR_REPLACEMENT_ENTITY = "IN_AADHAAR"
@@ -72,4 +74,6 @@ def get_custom_recognizers() -> list[PatternRecognizer]:
         DrivingLicenseRecognizer(),
         ItrAcknowledgementRecognizer(),
         RationCardNumberRecognizer(),
+        PassportNumberRecognizer(),
+        IndianMobileRecognizer(),
     ]

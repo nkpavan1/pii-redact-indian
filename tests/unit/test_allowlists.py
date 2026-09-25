@@ -10,8 +10,14 @@ def test_every_allowlisted_entity_has_a_recognizer():
         assert set(entities) <= supported, doc_type
 
 
-def test_chat_allowlist_matches_generic_for_now():
-    assert allowlist_for("chat") == allowlist_for("generic")
+def test_chat_allowlist_is_generic_plus_context_free_mobiles():
+    assert allowlist_for("chat") == [*allowlist_for("generic"), "IN_MOBILE"]
+
+
+def test_documents_never_get_the_context_free_mobile_recognizer():
+    for doc_type, entities in DOC_TYPE_ALLOWLISTS.items():
+        if doc_type != "chat":
+            assert "IN_MOBILE" not in entities, doc_type
 
 
 def test_unknown_doc_type_falls_back_to_default():

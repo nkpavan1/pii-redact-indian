@@ -277,14 +277,14 @@ code, not just here:
   sentences; the full table is in [HANDOFF.md](HANDOFF.md), section 5.
   - Place names, organizations, amounts, plain dates and medical terms are
     never masked.
-  - Several identifiers are masked only with a context word nearby: phone
-    numbers ("phone", "mobile", "number"), bank account numbers, UPI IDs,
-    voter IDs and dates of birth.
+  - Several identifiers are masked only with a context word nearby: bank
+    account numbers, UPI IDs, voter IDs, passport numbers, dates of birth,
+    and phone numbers other than Indian mobiles.
+  - Indian mobile numbers are masked without context in chat (the
+    service), but documents still need a context word, because statements
+    are full of 10-digit references.
   - Addresses are masked when they end in a PIN code or sit near the word
     "address".
-  - Passport numbers are effectively never masked: Presidio's passport
-    pattern can't reach the 0.5 threshold even next to the word
-    "passport".
   - Names after a title (Mr, Shri, Smt, Dr., ...) are caught even in all
     caps with initials; untitled names depend on spaCy.
 - **Latency.** NER costs roughly 0.17 s per 1K tokens of new text.

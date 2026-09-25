@@ -71,9 +71,11 @@ DOC_TYPE_ALLOWLISTS: dict[str, list[str]] = {
     "ais": [*_ALWAYS_SAFE, _DOB_ENTITY],
     "generic": DEFAULT_ALLOWLIST,
     # Free text sent to a cloud model (the redact-service / string API
-    # default). Same set as generic today; a separate entry so chat can
-    # diverge (e.g. adding LOCATION) without changing document behavior.
-    "chat": [*_ALWAYS_SAFE, _DOB_ENTITY],
+    # default). The generic set plus IN_MOBILE: Indian mobile numbers with
+    # no context word (recognizers/phone.py), reported as PHONE_NUMBER.
+    # Documents deliberately don't get it - a statement is full of 10-digit
+    # reference numbers.
+    "chat": [*_ALWAYS_SAFE, _DOB_ENTITY, "IN_MOBILE"],
 }
 
 
