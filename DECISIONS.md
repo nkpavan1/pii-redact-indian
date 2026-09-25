@@ -542,3 +542,62 @@ proposals. Steps 9–12 below; the contract is unchanged (see step 12).
   isn't created yet.
 - **Documents are unchanged,** as required: no `IN_MOBILE` in any
   document allow-list (tested).
+
+## Step 10: field names as context for CSV, XLSX and JSON
+
+**Decisions**
+- **Labels.** Each structured value that has a label is analyzed a second
+  time as `<label>: <value>` (the frontmatter trick), and the result is
+  merged with the value-alone pass using the same "context only adds"
+  merge as PDF context windows. The label is:
+  - **CSV:** the column header (when the file has one), plus the cell to
+    the left in the same row (for label-beside-value exports).
+  - **XLSX:** the **nearest label-like cell above** in the same column, not
+    row 1, because real statement exports start their table below a
+    preamble. Plus the label-like cell to the left. One top-to-bottom walk
+    per column, so linear.
+  - **JSON:** the value's key, or for an array item the nearest enclosing
+    key.
+- **"Label-like" means letters and no digits,** so an amount, a date or
+  another account number next to a value is never used as its label, and
+  a long column of account numbers keeps its header.
+- **Labels become words:**
+  - `account_number` and `accountNumber` become "account number" (spaCy
+    keeps `account_number` as one token);
+  - "A/C" and "Acct" become "account" (spaCy splits "A/C" into "A", "/",
+    "C", so it can never match).
+- **Ration-card fix (found by this step).** The ration-card pattern now
+  requires a digit. A synthetic statement's "Narration" header (and
+  "Registration", "Cardholder") was masked as `RATION_CARD_NUMBER_A`.
+  Presidio matches context words as **substrings** of nearby lemmas, and a
+  candidate word counts as its own neighbor. No real ration card number is
+  letters only.
+
+**Measured.** A 500-row, 7-column synthetic statement takes 16.4 s to
+analyze instead of 7.4 s (2.2×), because labeled cells are analyzed twice.
+The value-alone pass is kept deliberately: dropping it could lose a
+detection, and fail-closed comes first. A possible optimization is to
+skip the second pass when the label contains no recognizer's context word
+and no person-label word. Not done.
+
+**Gaps and caveats**
+- **Numeric XLSX cells are still not extracted,** so an account number
+  stored as a number (not text) is missed, even under its header. This is
+  the next gap before real XLSX statements; closing it needs a decision
+  about replacing a numeric cell (a formula input) with a code.
+- **Context words are matched as substrings** (Presidio's default
+  `context_matching_mode="substring"`): "acc" matches "according", "pan"
+  matches "company", "fund" matches "refund". This over-masks (the safe
+  direction). Whole-word mode is a one-line analyzer setting but costs
+  recall ("birth" would stop matching "birthday"), so it's a proposal, not
+  a change.
+- **Pre-existing, found while measuring:** about 8% of random 12-digit
+  reference numbers pass the Aadhaar Verhoeff checksum, and a valid
+  checksum is treated as certain without context. So statement UPI/UTR
+  references are sometimes masked as `IN_AADHAAR`. Proposal: require
+  Aadhaar context, or the `4-4-4` spaced format, when there's no context.
+  Not changed.
+- **`Customer Id` values are still unmasked.** The customer-ID recognizer
+  is on hold.
+- **Uninformative labels add nothing.** A label with no context words in
+  it ("Value", "Field 3") changes nothing; that's harmless.

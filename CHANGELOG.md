@@ -12,8 +12,14 @@ section 5).
   allow-lists keep context-scoped phone detection.
 - **Passport numbers are masked next to "passport"**, via a new recognizer
   that replaces Presidio's. Presidio's could never reach the threshold.
+- **Field names are context for structured data.** CSV headers and
+  left-hand labels, XLSX column headers (found even below a preamble) and
+  left-hand labels, and JSON keys now count as context for their values.
+  An account number under "Account No" or "A/C No" is masked.
 
 ### Changed
+- **Ration card numbers must contain a digit.** Words like "Narration" or
+  "Registration" were being masked as ration card numbers.
 - **Phone lookup keys** drop a `+91`/`91`/`0` prefix from Indian mobile
   numbers.
 

@@ -104,12 +104,20 @@ class ItrAcknowledgementRecognizer(PatternRecognizer):
 class RationCardNumberRecognizer(PatternRecognizer):
     """Detects: ration card number. FP/FN risk: HIGH - no national standard,
     state-issued formats vary widely (some purely numeric, some
-    alphanumeric). Intentionally broad + fully context-dependent."""
+    alphanumeric). Intentionally broad + fully context-dependent.
+
+    Must contain at least one digit. Without that, any 8-15 letter word
+    containing "ration" or "card" was masked as a ration card number -
+    found on a synthetic bank statement, where the standard column header
+    "Narration" became RATION_CARD_NUMBER_A ("Registration" would too).
+    Presidio matches context words as SUBSTRINGS of nearby lemmas, and a
+    candidate word counts as its own neighbor. No real ration card number
+    is letters only."""
 
     PATTERNS = [
         Pattern(
             "Ration card number (context required)",
-            r"\b[A-Z0-9]{8,15}\b",
+            r"\b(?=[A-Z0-9]*\d)[A-Z0-9]{8,15}\b",
             0.15,
         )
     ]

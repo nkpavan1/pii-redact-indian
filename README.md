@@ -289,12 +289,20 @@ code, not just here:
     caps with initials; untitled names depend on spaCy.
 - **Latency.** NER costs roughly 0.17 s per 1K tokens of new text.
   `redact-service` caches repeated texts. See HANDOFF.md, section 6.
-- **Structured data (CSV/XLSX/JSON) has no sentence context** (PDF/image
-  lines do — see "How it works" above). A cell's value is analyzed on its
-  own, so a bank account number sitting alone in a cell often won't be
-  confident enough to flag, even though the column header would tell a
-  human instantly what it is. The real fix is a field-name-driven fast
-  path (redact by known column/key name) — planned, not yet built.
+- **Structured data (CSV/XLSX/JSON) gets its context from field names.**
+  Each value is analyzed as `<label>: <value>`, where the label is:
+  - for CSV and XLSX, the column header and the label cell to its left;
+  - for JSON, the key.
+
+  So an account number under an "Account No" (or "A/C No") header is
+  masked. Remaining gaps:
+  - Numeric XLSX cells are still not scanned. An account number stored as
+    a number rather than as text is missed.
+  - A label that says nothing ("Value", "Field 3") adds nothing.
+- **Random 12-digit references can be masked as Aadhaar.** About 1 in 10
+  random 12-digit numbers passes the Aadhaar checksum, which is treated as
+  certain without context. So some UPI and UTR references on statements
+  are masked as `IN_AADHAAR`. That's the safe direction, but noisy.
 - **A short, decontextualized, non-sentence-like string can occasionally
   fool the NER model into tagging it as a person's name** (e.g. a table
   quarter label). Mitigated with a plausibility filter (a `PERSON` match

@@ -18,6 +18,7 @@ from pii_redact.anonymize.operators import get_anonymizer_engine, pseudonym_oper
 from pii_redact.audit.logger import AuditLogger
 from pii_redact.config.allowlists import allowlist_for
 from pii_redact.detect.analyzer import detect_in_block
+from pii_redact.detect.field_context import FIELD_CONTEXT_FORMATS, field_labels
 from pii_redact.extract.base import Extractor
 from pii_redact.extract.csv_ import CsvExtractor
 from pii_redact.extract.image import ImageExtractor
@@ -52,8 +53,8 @@ from pii_redact.types import (
 # _context_window). CSV/XLSX/JSON blocks are cells/values with no such
 # relationship - block N+1 in the list is not "near" block N in any sense
 # Presidio's context matching should exploit, so they're deliberately
-# excluded; that gap is real and is documented in detect/analyzer.py
-# instead of papered over here.
+# excluded here. Their context comes from their field label instead
+# (column header, left-hand label, JSON key - see detect/field_context.py).
 _CONTEXT_WINDOW_FORMATS = {DocFormat.PDF, DocFormat.IMAGE}
 _CONTEXT_WINDOW_RADIUS = 1
 _CONTEXT_WINDOW_SEPARATOR = " | "
@@ -372,18 +373,28 @@ def _not_written(
 def _detect_all(
     extracted: ExtractedDocument, doc_format: DocFormat, doc_type: str | None
 ) -> list[Detection]:
+    """Every block is analyzed on its own, and - where there is one - also
+    inside a wider context: its spatial neighbors for PDF/image lines
+    (_context_window), or its field label for CSV/XLSX/JSON values
+    (detect/field_context.py: "<label>: <value>"). The two passes are
+    merged so context can only add or widen detections, never lose one."""
     entities = allowlist_for(doc_type)
+    labels = field_labels(extracted) if doc_format in FIELD_CONTEXT_FORMATS else {}
     detections: list[Detection] = []
     for i, block in enumerate(extracted.blocks):
         base_detections = detect_in_block(block, i, entities)
         if doc_format in _CONTEXT_WINDOW_FORMATS:
             window_text, offset = _context_window(extracted.blocks, i)
-            windowed_detections = detect_in_block(
-                block, i, entities, context_text=window_text, context_offset=offset
-            )
-            detections.extend(_merge_detections(base_detections, windowed_detections))
+        elif i in labels:
+            prefix = f"{labels[i]}: "
+            window_text, offset = prefix + block.text, len(prefix)
         else:
             detections.extend(base_detections)
+            continue
+        windowed_detections = detect_in_block(
+            block, i, entities, context_text=window_text, context_offset=offset
+        )
+        detections.extend(_merge_detections(base_detections, windowed_detections))
     return detections
 
 
