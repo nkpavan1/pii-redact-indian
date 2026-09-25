@@ -74,6 +74,12 @@ MIN_TOKEN_CHARS = 32
 MAX_TEXTS_PER_REQUEST = 10_000
 STORE_LOCK_TIMEOUT_S = 10
 QUEUE_TIMEOUT_S = 300
+# An error sent before the request body was read (401, 413, ...) would
+# otherwise close a socket with unread data, which Windows answers with a
+# TCP reset that can reach the client before the response does. Bodies up to
+# this size are read and discarded first, so the client gets the JSON error.
+DRAIN_LIMIT_BYTES = 64 * 1024 * 1024
+DRAIN_TIMEOUT_S = 5
 
 _ROUTES = ("/health", "/v1/redact", "/v1/reverse")
 _WARM_UP_TEXT = "Warm-up: Ravi Kumar, PAN ABCPE1234F, mobile 9876543210, ravi@example.com."
@@ -305,6 +311,7 @@ class _Handler(BaseHTTPRequestHandler):
         request_id = uuid.uuid4().hex[:12]
         route = urlsplit(self.path).path
         info = ""
+        self._body_consumed = False
         try:
             status, payload, info = self._handle(route, request_id)
         except _RequestError as exc:
@@ -384,6 +391,7 @@ class _Handler(BaseHTTPRequestHandler):
         if length > self.server.max_body_bytes:
             raise _RequestError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "body too large")
         body = self.rfile.read(length)
+        self._body_consumed = True
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
@@ -395,7 +403,31 @@ class _Handler(BaseHTTPRequestHandler):
             raise _RequestError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "too many texts")
         return texts
 
+    def _drain_unread_body(self) -> None:
+        """Reads and discards a request body that was never read (see
+        DRAIN_LIMIT_BYTES). The discarded bytes are never looked at."""
+        if getattr(self, "_body_consumed", True):
+            return
+        self._body_consumed = True
+        try:
+            remaining = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            return
+        if remaining <= 0 or remaining > DRAIN_LIMIT_BYTES:
+            return
+        try:
+            self.connection.settimeout(DRAIN_TIMEOUT_S)
+            while remaining > 0:
+                chunk = self.rfile.read(min(1 << 16, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+
     def _reply(self, status: int, payload: dict, request_id: str | None = None) -> None:
+        if status >= 400:
+            self._drain_unread_body()
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

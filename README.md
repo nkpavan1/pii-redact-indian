@@ -136,6 +136,19 @@ The one thing it can't do for you: installing Tesseract OCR (a native
 Windows installer, not a `pip` package). The script prints the link and
 what to do with it when it finishes.
 
+## Commands at a glance
+
+| Command | What it does |
+|---|---|
+| `redact` | Redact or pseudonymize files or a folder, in their own format or as markdown (`--format markdown`) |
+| `redact-publish` | Publish reviewed, redacted markdown copies of an outbox folder (incremental) |
+| `redact-service` | Localhost HTTP service that pseudonymizes chat text for cloud models and restores codes in replies |
+| `redact-key` | Set up, check, back up and restore the mapping store's key |
+
+All four share one mapping store, so a person gets the same code
+(`PERSON_A`) everywhere. From Python: `from pii_redact import MappingStore,
+redact_text, reverse_text`.
+
 ## Usage
 
 ```powershell
@@ -260,6 +273,19 @@ then run `redact-key import`.
 Honest gaps, not hidden ones — each is documented in its own module's
 code, not just here:
 
+- **What is not masked in free text.** This was checked on synthetic
+  sentences; the full table is in [HANDOFF.md](HANDOFF.md), section 5.
+  - Place names, organizations, amounts, plain dates and medical terms are
+    never masked.
+  - Several identifiers are masked only with a context word nearby: phone
+    numbers ("phone", "mobile", "number"), bank account numbers, UPI IDs,
+    voter IDs, addresses ("address") and dates of birth.
+  - Passport numbers are effectively never masked: Presidio's passport
+    pattern can't reach the 0.5 threshold even next to the word
+    "passport".
+  - All-caps names with initials after a title leave the initial behind.
+- **Latency.** NER costs roughly 0.17 s per 1K tokens of new text.
+  `redact-service` caches repeated texts. See HANDOFF.md, section 6.
 - **Structured data (CSV/XLSX/JSON) has no sentence context** (PDF/image
   lines do — see "How it works" above). A cell's value is analyzed on its
   own, so a bank account number sitting alone in a cell often won't be

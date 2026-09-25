@@ -291,7 +291,27 @@ docstring, not silently missing):
   text can be misleading in `redact` mode. Not fixed — would need an
   entity-type priority order, not just "highest score."
 
-Run `pytest` to see what's covered today (214 tests as of this writing).
+### Phase 7 additions (0.2.0)
+
+- **`api.py`**: the string API (`redact_text`, `reverse_text`, `find_pii`).
+- **`publish.py`**: `redact-publish`.
+- **`service.py`**: `redact-service`.
+- **`keytool.py` + `clipboard.py`**: `redact-key`.
+- **`extract/text.py` + `render/text.py`**: `.md` and `.txt` input.
+- **`render/markdown.py`**: markdown output for every format.
+- **`config/paths.py`**: the redaction home.
+- **`anonymize/mapping_store.py`**: atomic writes, cache mode,
+  transactions, `create=False`, keyed digests.
+- **`detect/analyzer.py`**: chunked analysis of long texts.
+
+What was decided, and what is knowingly left open, is logged step by step
+in [DECISIONS.md](DECISIONS.md). The service contract and measured latency
+are in [HANDOFF.md](HANDOFF.md).
+
+Run `pytest` to see what's covered today (426 tests as of 0.2.0, one of
+them opt-in: `PII_REDACT_KEYRING_TESTS=1` runs the single test that uses
+the real OS credential store; every other test is blocked from touching
+it).
 
 ## Setup (Windows)
 

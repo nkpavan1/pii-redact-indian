@@ -7,9 +7,18 @@ venv/
 build/
 dist/
 
-# Never commit real documents or the mapping store
+# Never commit real documents, the mapping store, or anything else the
+# tools keep in the redaction home
 /input/
 /output/
 *.mapping.db
 *.mapping.enc
+*.enc
+*.enc.tmp
+*.lock
 *.key
+service.token
+service.pid
+publish_manifest.json
+audit.log.jsonl
+/reports/

@@ -210,15 +210,27 @@ def test_bad_requests_are_400_and_never_echo_input(ready, raw_body, reason):
 
 
 def test_body_over_the_cap_is_413(store):
+    # Repeated, with a body far over the cap: the response must arrive every
+    # time. Closing a socket with unread data makes Windows send a reset
+    # that could beat the 413 to the client; the server drains the body
+    # first so it can't.
     handle = _start(store, max_body_bytes=200)
     try:
         handle.service.warm_up()
-        status, body, _ = _call(handle.port, "POST", "/v1/redact", {"texts": ["x" * 500]})
-        assert status == 413
-        assert body == {"error": "body too large"}
+        for _ in range(15):
+            status, body, _ = _call(handle.port, "POST", "/v1/redact", {"texts": ["x" * 300_000]})
+            assert status == 413
+            assert body == {"error": "body too large"}
     finally:
         handle.server.shutdown()
         handle.server.server_close()
+
+
+def test_unauthorized_request_with_a_large_body_still_gets_its_401(ready):
+    for _ in range(15):
+        status, body, _ = _call(ready.port, "POST", "/v1/redact", {"texts": ["x" * 300_000]}, token="wrong" * 10)
+        assert status == 401
+        assert body == {"error": "unauthorized"}
 
 
 def test_missing_content_length_is_411(ready):
@@ -437,6 +449,37 @@ def test_main_refuses_without_a_token(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("PII_REDACT_SERVICE_TOKEN", raising=False)
     assert service.main(["--home", str(tmp_path)]) == 2
     assert "not found" in capsys.readouterr().err
+
+
+def test_main_runs_end_to_end_after_redact_key_init(tmp_path, monkeypatch, fake_keyring):
+    from pii_redact import keytool
+
+    home = tmp_path / "home"
+    assert keytool.main(["init", "--store", str(home / "mapping_store.enc")]) == 0
+    (home / "service.token").write_text(TOKEN + "\n", encoding="utf-8")
+    monkeypatch.delenv("PII_REDACT_SERVICE_TOKEN", raising=False)
+    pid_file = tmp_path / "service.pid"
+    seen = {}
+
+    def serve_once(self, poll_interval=0.5):
+        # Stands in for the endless loop: serve until warm-up is done, make
+        # one real request, then return as if stopped.
+        thread = threading.Thread(target=service.ThreadingHTTPServer.serve_forever, args=(self, 0.05), daemon=True)
+        thread.start()
+        deadline = time.time() + 60
+        while not self.service.ready and time.time() < deadline:
+            time.sleep(0.05)
+        seen["pid_file"] = pid_file.exists()
+        seen["health"] = _call(self.server_port, "GET", "/health", token=None)[:2]
+        seen["redact"] = _call(self.server_port, "POST", "/v1/redact", {"texts": [NOTE]})[:2]
+        self.shutdown()
+
+    monkeypatch.setattr(service.ServiceServer, "serve_forever", serve_once)
+    assert service.main(["--home", str(home), "--port", "0", "--pid-file", str(pid_file)]) == 0
+    assert seen["pid_file"] is True
+    assert seen["health"][0] == 200
+    assert seen["redact"] == (200, {"texts": ["PERSON_A, PAN IN_PAN_A, asked about the loan."], "entities": {"PERSON": 1, "IN_PAN": 1}})
+    assert not pid_file.exists()
 
 
 def test_main_refuses_without_an_initialized_store(tmp_path, monkeypatch, fake_keyring, capsys):

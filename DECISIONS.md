@@ -353,3 +353,62 @@ Warm-up took 0.8 s with the model files in the OS file cache. A cold start
 - **Settings are fixed per process.** The contract has no per-request
   entities or threshold, so they're set at startup (`--threshold`; the
   entity list is the `chat` allow-list).
+
+## Step 7: docs, version 0.2.0, HANDOFF
+
+**Decisions**
+- **Version.** Bumped to 0.2.0.
+- **Declared dependency.** `pyyaml` is now declared: it was already
+  installed as a Presidio dependency, but this code imports it directly.
+- **`.gitignore` gap closed.** It only matched `*.mapping.enc`, not
+  `mapping_store.enc`. It now also covers `*.enc`, the lock files, the token
+  and pid files, the manifest, the audit log and reports.
+- **Masking table checked, not written from the code.** HANDOFF.md's "what
+  gets masked" table comes from running `redact_text` on synthetic
+  sentences. This corrected two assumptions: UPI IDs and voter IDs **do**
+  need a context word.
+- **Venv location.** HANDOFF.md gives the start command for the venv this
+  build is installed into today (`F:\claude\projects\redaction tool\.venv`,
+  with this clone installed in editable mode) and the path to use if the
+  venv is recreated in the clone.
+- **Readiness wait.** A warm process start is about 1.5 s (model files in
+  the OS cache). The 120 s readiness wait allows for a first start after
+  boot.
+- **Test added.** `redact-service`'s `main()` now has an end-to-end test
+  (fake credential store, `redact-key init`, warm-up, a real request, pid
+  file lifecycle).
+- **Real bug found through a flaky test.**
+  - `test_body_over_the_cap_is_413` failed about 1 run in 7. The service
+    answered 413 without reading the oversized body, then closed the
+    socket. Windows answers a close with unread data with a TCP reset,
+    which sometimes reached the client before the response did. The same
+    race applied to a 401 sent before the body was read.
+  - The service now reads and discards an unread body of up to 64 MB before
+    sending any error. The discarded bytes are never inspected.
+  - The tests now send 15 × 300 KB bodies. They fail 3 of 3 times with the
+    drain disabled and passed 8 of 8 service-suite runs with it.
+
+**Detection gaps found while checking, now PROPOSALS awaiting a decision**
+(not implemented):
+1. **Phone numbers.**
+   - Presidio's phone recognizer scores 0.4, under the 0.5 threshold. Only
+     "phone", "mobile", "telephone", "cell" and "number" lift it, and
+     "call" did not in testing.
+   - So `call me on 9876543210`, `whatsapp …` and `+91 98765 43210` stay in
+     the clear. This is the biggest gap for chat.
+   - Proposal: an Indian-mobile pattern (`+91`/`0` optional, `[6-9]` plus
+     9 digits) that is confident enough on its own, in the **chat**
+     allow-list only, so document types keep today's context-scoped
+     behavior. Plus more context words: whatsapp, contact, ph, tel, reach.
+2. **Passport numbers.**
+   - Presidio's passport pattern starts at 0.1, so even next to "passport"
+     it reaches only 0.45. `IN_PASSPORT` is in every allow-list but can
+     never fire.
+   - Proposal: a context-scoped passport recognizer at 0.15, reaching 0.5
+     with "passport" nearby, the same scheme as the other context-scoped
+     IDs.
+3. **Field-name context for CSV, XLSX and JSON** (from step 4): analyze
+   `column: value` so a header like `account_number` counts as context.
+
+**Approved and built next (step 8):** all-caps names after a title, and
+PIN-code-anchored addresses.

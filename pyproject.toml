@@ -1,6 +1,6 @@
 [project]
 name = "pii-redact"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local PII redaction and pseudonymization CLI for Indian personal documents"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -26,6 +26,9 @@ dependencies = [
     "cryptography>=42.0",
     "keyring>=25.0",
     "filelock>=3.13",
+    # Markdown frontmatter (redact-publish). Already installed as a
+    # presidio-analyzer dependency; listed because this code imports it.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
