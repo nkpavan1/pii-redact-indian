@@ -57,7 +57,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
+from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.predefined_recognizers import (
     InGstinRecognizer,
     InPanRecognizer,
@@ -70,6 +70,21 @@ from pii_redact.detect.recognizers import AADHAAR_REPLACEMENT_ENTITY, get_custom
 from pii_redact.types import Detection, TextBlock
 
 SCORE_THRESHOLD = 0.5
+
+# MEASURED, NOT ASSUMED: one analyze() call is quadratic in text length.
+# Presidio's LemmaContextAwareEnhancer walks every token of the whole
+# document for every candidate result (_find_index_of_match_token), and
+# a long text has thousands of low-score candidates before thresholding -
+# profiled at ~84M token visits for a ~200K-character text. spaCy itself is
+# linear (1.4s at 48K chars, 5.8s at 200K), but analyze() took 2.2s and
+# 16s. Long texts are therefore analyzed in chunks of about _CHUNK_CHARS,
+# cut at a paragraph, line, sentence or word boundary, each analyzed
+# together with _CHUNK_OVERLAP_CHARS of its neighbors so that a name, a
+# context word or a long match (an address) near a cut is still seen whole.
+# A result belongs to the chunk it starts in, so none is counted twice.
+_CHUNK_CHARS = 10_000
+_CHUNK_OVERLAP_CHARS = 1_000
+_CHUNK_BREAKS = ("\n\n", "\n", ". ", " ")
 
 # Presidio's India-specific built-ins that ship disabled (see module
 # docstring) - activated explicitly here, the same way a custom recognizer
@@ -141,6 +156,41 @@ def _person_span_end(text: str, start: int, end: int) -> int:
     return start + match.start() if match else end
 
 
+def _chunk_bounds(text: str) -> list[tuple[int, int]]:
+    bounds = []
+    start, n = 0, len(text)
+    while start < n:
+        end = min(n, start + _CHUNK_CHARS)
+        if end < n:
+            earliest = start + int(_CHUNK_CHARS * 0.8)
+            for separator in _CHUNK_BREAKS:
+                cut = text.rfind(separator, earliest, end)
+                if cut != -1:
+                    end = cut + len(separator)
+                    break
+        bounds.append((start, end))
+        start = end
+    return bounds
+
+
+def _analyze(text: str, entities: list[str], language: str, score_threshold: float) -> list[RecognizerResult]:
+    analyzer = get_analyzer()
+    if len(text) <= _CHUNK_CHARS:
+        return analyzer.analyze(text=text, entities=entities, language=language, score_threshold=score_threshold)
+    results = []
+    for start, end in _chunk_bounds(text):
+        window_start = max(0, start - _CHUNK_OVERLAP_CHARS)
+        window_end = min(len(text), end + _CHUNK_OVERLAP_CHARS)
+        for r in analyzer.analyze(
+            text=text[window_start:window_end], entities=entities, language=language, score_threshold=score_threshold
+        ):
+            if start <= window_start + r.start < end:
+                results.append(
+                    RecognizerResult(r.entity_type, window_start + r.start, window_start + r.end, r.score)
+                )
+    return results
+
+
 def detect_in_block(
     block: TextBlock,
     block_index: int,
@@ -169,14 +219,8 @@ def detect_in_block(
     text to begin with. A clip that leaves nothing inside the block's
     range is dropped.
     """
-    analyzer = get_analyzer()
     text = block.text if context_text is None else context_text
-    results = analyzer.analyze(
-        text=text,
-        entities=entities,
-        language=language,
-        score_threshold=score_threshold,
-    )
+    results = _analyze(text, entities, language, score_threshold)
 
     block_start = context_offset
     block_end = context_offset + len(block.text)

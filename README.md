@@ -200,6 +200,30 @@ redact-publish --outbox X --published Y --home Z --doc-type bank_statement
 It needs an initialized store (`redact-key init`, below) and never creates
 one on its own.
 
+## Redacting chat traffic: `redact-service`
+
+A localhost HTTP service for a gateway hook: it pseudonymizes every text
+before it goes to a cloud model, and restores the codes in the reply. It
+shares the mapping store with `redact-publish`, so a person has the same
+code in published documents and in chat.
+
+```powershell
+redact-service --port 8787 --home H:\ai\redaction
+```
+
+- Binds `127.0.0.1` only.
+- `/v1/redact` and `/v1/reverse` need `Authorization: Bearer <token>`. The
+  token comes from `$env:PII_REDACT_SERVICE_TOKEN`, or else the first line of
+  `<home>\service.token`. The service refuses to start without a token of at
+  least 32 characters.
+- `GET /health` needs no auth. It returns 503 until the NLP model is loaded
+  and warmed up, then 200.
+- Logs hold request ids, counts and latency, never text. Nothing from a
+  request is written to disk.
+
+The full HTTP contract, start/stop commands and measured latency are in
+[HANDOFF.md](HANDOFF.md).
+
 ## The mapping store and its key
 
 Pseudonymized output is only reversible while you still have **both** the

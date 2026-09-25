@@ -254,7 +254,10 @@ def find_pii(
     if not detections:
         return []
     detections = _outside_codes(detections, find_codes(text, set(store.all_codes())), text)
-    return sorted(Finding(d.entity_type, d.start, d.end, d.score) for d in detections)
+    return sorted(
+        (Finding(d.entity_type, d.start, d.end, d.score) for d in detections),
+        key=lambda f: (f.start, f.end, f.entity_type),
+    )
 
 
 def reverse_texts(texts: Sequence[str], store: MappingStore) -> list[str]:

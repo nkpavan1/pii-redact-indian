@@ -38,6 +38,7 @@ dev = [
 redact = "pii_redact.cli:main"
 redact-key = "pii_redact.keytool:main"
 redact-publish = "pii_redact.publish:main"
+redact-service = "pii_redact.service:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

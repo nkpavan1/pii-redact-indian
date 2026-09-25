@@ -309,6 +309,18 @@ def test_unreadable_store_raises(tmp_path):
         reverse_text("PERSON_A", store)
 
 
+def test_find_pii_reports_what_is_still_in_the_clear_in_order(store):
+    store.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+    text = "PERSON_A met Asha Rao; PAN ABCPE1234F; email asha@example.com"
+    findings = api.find_pii(text, store)
+    assert [(f.entity_type, text[f.start : f.end]) for f in findings] == [
+        ("PERSON", "Asha Rao"),
+        ("IN_PAN", "ABCPE1234F"),
+        ("EMAIL_ADDRESS", "asha@example.com"),
+    ]
+    assert store.all_codes() == {"PERSON_A": "Ravi Kumar"}  # read-only: nothing issued
+
+
 def test_result_repr_shows_counts_only(store):
     res = redact_text(TEXT, store)
     shown = repr(res)

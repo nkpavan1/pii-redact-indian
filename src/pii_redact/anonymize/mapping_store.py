@@ -247,6 +247,9 @@ class MappingStore:
         self._snapshot: _Snapshot | None = None
         self._txn: _Snapshot | None = None
         self._txn_dirty = False
+        # Bumped whenever the in-memory state is rebuilt from different file
+        # contents - see refresh().
+        self._generation = 0
 
     # --- file access (callers hold self._mutex)
 
@@ -281,6 +284,7 @@ class MappingStore:
         if cached is not None and cached.raw == raw:
             cached.signature = signature
             return cached
+        self._generation += 1
         if not raw:
             return _Snapshot.build(raw, signature, {"entries": [], "counters": {}})
         try:
@@ -334,6 +338,17 @@ class MappingStore:
         guessable string ("Ravi Kumar PAN.pdf") can be reversed by trying
         candidates; this one can't without the key."""
         return hmac.new(self._digest_key, text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def refresh(self) -> int:
+        """Brings the in-memory state up to date (in cache mode, only if the
+        file changed) and returns a generation number that changes whenever
+        the state was rebuilt from different file contents - i.e. when
+        something other than this instance's own writes changed the store.
+        A caller caching results derived from the store drops them when the
+        number changes."""
+        with self._mutex:
+            self._snapshot_for_read()
+            return self._generation
 
     def load(self) -> int:
         """Reads the store now (whatever the cache says) and returns how many

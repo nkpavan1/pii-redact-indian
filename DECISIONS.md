@@ -261,3 +261,95 @@ builds the LiteLLM hook). `HANDOFF.md` has the service contract;
 - **No dry-run mode.**
 - **Not run against the real vault folders here.** Everything was tested on
   temporary folders.
+
+## Step 6: `redact-service` (Tool 2)
+
+**Decisions** (the contract itself is in `HANDOFF.md`)
+- **stdlib only.** `ThreadingHTTPServer`, as agreed, with no new
+  dependencies.
+- **Locking.** Redaction is serialized by one processing lock. `/v1/reverse`
+  doesn't take it, since it needs no NER. `/health` reads plain status
+  attributes and never takes any lock. It answers in milliseconds while a
+  50K-token request is running (tested by holding the lock).
+- **Startup checks happen before binding the port:** the host, the token,
+  and the store (key present, file decrypts). A misconfiguration exits with
+  code 2 at once instead of serving 503 forever. Warm-up runs in the
+  background after binding, and `/health` reports `starting` until it ends.
+  A failed warm-up reports `failed` and stops the process with exit code 1.
+- **Warm-up issues no codes.** It uses the read-only `find_pii`, so
+  starting the service never writes synthetic entries into the real store.
+- **Endpoints before warm-up.** `/v1/*` return 503 until warm-up ends,
+  after the auth check, so an unauthenticated caller gets 401 either way.
+- **Token.**
+  - `$PII_REDACT_SERVICE_TOKEN` wins whenever it is **set**; a set but too
+    short variable is an error, never a fallback to the file. Otherwise the
+    first line of the token file is used.
+  - UTF-16 and UTF-8-with-BOM files are accepted, because Windows
+    PowerShell 5.1 writes those by default.
+  - Error messages never contain the token or its length.
+  - Comparison uses `hmac.compare_digest`.
+- **Result cache.**
+  - Keys are SHA-256 over the settings (sorted entity list and threshold)
+    and the text, so a result from different settings can never be
+    returned.
+  - It's bounded at 2,000 entries **and** 64M characters, so a few huge
+    texts can't take all memory.
+  - It's memory-only.
+  - It's cleared whenever another process changes the store
+    (`MappingStore.refresh()` generation). The service's own writes don't
+    clear it.
+- **Hardening beyond the brief.**
+  - The port is bound with `SO_EXCLUSIVEADDRUSE` and without
+    `SO_REUSEADDR`, so another local process can't take over port 8787.
+  - The stdlib handler's raw request-line logging and HTML error pages
+    (which echo the request line) are replaced.
+  - Query strings are ignored for routing and never logged; only known
+    routes are logged by name.
+  - Every error response closes the connection, so an unread body can't
+    corrupt the next request.
+  - The per-request limit is 10,000 texts. The store lock wait is 10 s,
+    after which the service returns 503 `store unavailable`.
+- **Long-text performance fix (unplanned, measured).**
+  - One Presidio `analyze()` call is quadratic in text length. Its
+    context enhancer walks every token for every candidate result:
+    profiled at about 84M token visits for a 200K-character text, which
+    took 16 s where spaCy alone takes 5.8 s.
+  - Texts over 10,000 characters are now analyzed in chunks cut at
+    paragraph, line, sentence or word boundaries, each with 1,000
+    characters of overlap on both sides. A result belongs to the chunk it
+    starts in.
+  - A test checks that chunked analysis finds exactly what one pass finds.
+  - 50K tokens went from 16.2 s to 8.8 s at p50.
+- **`--pid-file`** is available for scripted stops.
+
+**Measured latency** (in-process, loopback HTTP, synthetic text with PII
+about every 5 sentences, Python 3.10, AMD64 laptop CPU, idle machine;
+`scripts/bench_service.py`):
+
+| Scenario | p50 | p95 |
+|---|---|---|
+| 12K-token prompt, one new text | 2.06 s | 2.12 s |
+| 50K-token prompt, one new text | 8.82 s | 8.93 s |
+| 20-message history (about 12K tokens), last one new, cache on | 97 ms | 108 ms |
+| same, cache off | 1.68 s | 1.71 s |
+| reverse, 12K-token reply | 1.1 ms | 1.3 ms |
+
+Warm-up took 0.8 s with the model files in the OS file cache. A cold start
+(first run after boot) is slower; see HANDOFF.md for the readiness wait.
+
+**Gaps and caveats**
+- **Latency scales with new text.** Cost is roughly 0.17 s per 1K tokens of
+  *new* text, and requests are serialized, so two simultaneous 50K-token
+  requests take about 18 s for the second. The hook timeout recommendation
+  in HANDOFF.md allows for that.
+- **Crash dumps.** A hard crash of the Python process could leave a Windows
+  Error Reporting dump containing process memory (and so request text), if
+  WER local dumps are enabled for `python.exe`. They are off by default.
+  This is outside the tool's control; noted for completeness.
+- **One text over 1,000,000 characters** gets 413 `text too large` (spaCy's
+  limit), even under the 4 MB body cap.
+- **No TLS.** It isn't needed on loopback with WSL mirrored networking. The
+  token is still sent in clear over loopback.
+- **Settings are fixed per process.** The contract has no per-request
+  entities or threshold, so they're set at startup (`--threshold`; the
+  entity list is the `chat` allow-list).
