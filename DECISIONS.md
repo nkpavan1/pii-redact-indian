@@ -323,8 +323,10 @@ builds the LiteLLM hook). `HANDOFF.md` has the service contract;
 - **`--pid-file`** is available for scripted stops.
 
 **Measured latency** (in-process, loopback HTTP, synthetic text with PII
-about every 5 sentences, Python 3.10, AMD64 laptop CPU, idle machine;
-`scripts/bench_service.py`):
+about every 5 sentences, Python 3.10, desktop AMD Ryzen 5 9600X with 6
+cores / 12 threads (corrected in step 12; this first said "AMD64 laptop
+CPU"), idle machine; `scripts/bench_service.py`; 0.2.0 numbers, see step
+12 for 0.3.0):
 
 | Scenario | p50 | p95 |
 |---|---|---|
@@ -641,3 +643,51 @@ reusing the installed model instead of downloading it)
   measured in this session: the full run opens the real store, which
   means a Credential Manager lookup, and a true cold start needs a reboot.
   The 1.5 s warm figure says little about a cold read of the 425 MB model.
+
+## Step 12: benchmark re-run, CPU description, version 0.3.0
+
+**Decisions**
+- **CPU corrected.** The benchmark machine is a desktop **AMD Ryzen 5
+  9600X (6 cores / 12 threads)**, confirmed with `Win32_Processor`. HANDOFF
+  section 6 and step 6 above said "AMD64 laptop CPU", which came from
+  `platform.processor()` and was wrong.
+- **Benchmark re-run** after steps 9–11 (new recognizers, field context,
+  new venv). Two full runs gave the same result:
+
+  | Request | 0.2.0 (step 6) | 0.3.0, p50 / p95 |
+  |---|---|---|
+  | 12K tokens, all new | 2.06 / 2.12 s | 1.88 / 1.91 s |
+  | 50K tokens, all new | 8.82 / 8.93 s | 7.96 / 8.08 s |
+  | 20-message history, cache on | 97 / 108 ms | 94 / 96 ms |
+  | same, cache off | 1.68 / 1.71 s | 1.61 / 1.62 s |
+  | reverse, 12K tokens | 1.1 / 1.3 ms | 1.1 / 1.2 ms |
+
+  - **The new recognizers cost nothing measurable.** The ~9% improvement is
+    **not** from this release's code, which only added work. An A/B on
+    the same code gave identical numbers from the old F: venv and the new
+    H: venv (12K: 1.86 vs 1.87 s; 50K: 7.94 vs 7.94 s). So the difference
+    is the machine's state between the two sessions.
+  - HANDOFF section 6 now shows the 0.3.0 numbers. The 30 s hook timeout
+    stands (3.7× the 50K p95).
+  - Field context (step 10) doesn't affect these numbers: it applies to
+    CSV, XLSX and JSON documents, not to the service.
+- **Version 0.3.0,** not 0.2.1: new detection features (context-free
+  mobiles in chat, passports, field-name context) and a changed default
+  runtime, but no API or contract change.
+
+**What changed in the contract (review round 2): nothing but the masking
+table.**
+- Endpoints, request and response shapes, auth, error codes, `/health`
+  states, env vars and limits are unchanged.
+- The `version` in `/health` now reads `0.3.0`.
+- **Entity names callers can see are unchanged.** Context-free mobiles are
+  reported as `PHONE_NUMBER`; the internal `IN_MOBILE` type never appears
+  in codes or counts (tested).
+- **`IN_PASSPORT` now actually occurs** in codes and in the `entities`
+  counts. It was always a possible entity type but could never fire
+  before.
+- **More masked in chat:** Indian mobile numbers without context, and
+  passport numbers next to "passport" (HANDOFF section 5).
+- **Other phone-code keys merge:** existing `+91…` or `0…` phone codes now
+  share one code with the bare 10-digit form. There's no store on `H:` yet,
+  so nothing is split in practice.

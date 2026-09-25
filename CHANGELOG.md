@@ -1,9 +1,11 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-09-25)
 
 The HTTP contract is unchanged. Only what gets masked changes (HANDOFF.md,
-section 5).
+section 5), and `/health` reports version `0.3.0`. Latency is unchanged
+(re-benchmarked on the actual machine, a desktop Ryzen 5 9600X; HANDOFF.md
+section 6).
 
 ### Added
 - **Indian mobile numbers are masked in chat without a context word**

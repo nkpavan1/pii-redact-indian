@@ -244,28 +244,30 @@ clear):
 ## 6. Latency and the hook timeout
 
 Measured with `scripts/bench_service.py`: loopback HTTP, synthetic prompts
-with PII about every 5 sentences, AMD64 laptop CPU, idle machine. Token
-counts are estimated at 4 characters per token.
+with PII about every 5 sentences, on a desktop AMD Ryzen 5 9600X
+(6 cores / 12 threads), idle machine, version 0.3.0 from the
+`H:\ai\engines` venv. Token counts are estimated at 4 characters per
+token.
 
 | Request | p50 | p95 |
 |---|---|---|
-| `/v1/redact`, 12K-token prompt, all new text | 2.06 s | 2.12 s |
-| `/v1/redact`, 50K-token prompt, all new text | 8.82 s | 8.93 s |
-| `/v1/redact`, 20-message history (about 12K tokens), only the last new, cache on | 97 ms | 108 ms |
-| same, cache off | 1.68 s | 1.71 s |
-| `/v1/reverse`, 12K-token reply | 1.1 ms | 1.3 ms |
+| `/v1/redact`, 12K-token prompt, all new text | 1.88 s | 1.91 s |
+| `/v1/redact`, 50K-token prompt, all new text | 7.96 s | 8.08 s |
+| `/v1/redact`, 20-message history (about 12K tokens), only the last new, cache on | 94 ms | 96 ms |
+| same, cache off | 1.61 s | 1.62 s |
+| `/v1/reverse`, 12K-token reply | 1.1 ms | 1.2 ms |
 
-- **Cost scales with new text.** It's roughly 0.17 s per 1K tokens of *new*
+- **Cost scales with new text.** It's roughly 0.16 s per 1K tokens of *new*
   text. Anything the service has seen before (a repeated system prompt,
   earlier turns) comes from its cache.
-- **Tara's ~64K-token requests** should take about 11–12 s when entirely
+- **Tara's ~64K-token requests** should take about 10–11 s when entirely
   new.
 - **Requests are serialized,** so a request can wait behind one already in
   progress.
 
 **Recommended hook timeouts:**
-- `/v1/redact`: **30 s**. That's about 3× the 50K-token p95, enough to
-  wait behind one other large request.
+- `/v1/redact`: **30 s**, unchanged. That's about 3.7× the 50K-token p95,
+  enough to wait behind one other large request.
 - `/v1/reverse`: **10 s**.
 - On timeout: block.
 
