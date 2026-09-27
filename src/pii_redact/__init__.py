@@ -14,7 +14,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 _LAZY_EXPORTS = {
     "MappingStore": "pii_redact.anonymize.mapping_store",

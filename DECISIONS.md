@@ -1181,3 +1181,29 @@ masked together with its label, and release tags. Steps 19–20 below.
 - **Not re-benchmarked.** The trim is a short loop per PIN match, and PIN
   matches are few.
 
+## Step 20: release tags, version 0.4.1
+
+- **Tags.** Every release commit has an annotated tag.
+  - `v0.2.0` (`a3d7a23`), `v0.3.0` (`8a370bc`) and `v0.4.0` (`7c9a8fd`)
+    were added after the fact, and `v0.4.1` is this release.
+  - The stack asked for tags from `v0.4.0` on. The two older ones cost
+    nothing and make `git describe` meaningful on older checkouts.
+  - From now on, a release commit gets its tag in the same step.
+- **What a tag means.** The tagged commit passed the full suite, and
+  `/health` reports the same version.
+- **A flaky service test, fixed on the way.**
+  `test_repeated_history_is_served_from_the_cache` failed in two of three
+  full runs while checking this release.
+  - The service logs a request after replying to it, so the test could
+    read the log before the line was there.
+  - The two tests that check logs never contain text had the same race.
+    They could pass without having seen the last request's line.
+  - The tests now wait, up to 5 s, for one log line per request.
+  - The service is unchanged; its log line's `ms` includes writing the
+    reply.
+- **Version 0.4.1**, a patch: a masking fix, with no new behavior
+  elsewhere.
+- **Contract: unchanged.** Endpoints, shapes, auth, errors, limits, env
+  vars and `/health` fields are the same; `version` reads `0.4.1`. Only
+  the masking changes: for an address ending in a PIN code, the label and
+  the words leading into it stay in the clear.

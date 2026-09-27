@@ -1,7 +1,7 @@
 # HANDOFF: redact-service for the stack session
 
 This is what the stack session (LiteLLM hook, `start-stack.ps1`) needs from
-pii-redact 0.4.0. Background and every design decision are in
+pii-redact 0.4.1. Background and every design decision are in
 [DECISIONS.md](DECISIONS.md), the user-facing changes are in
 [CHANGELOG.md](CHANGELOG.md), and README.md has the rest of the tool.
 
@@ -60,6 +60,13 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
   `git pull` in the clone takes effect on the next service start. A new
   dependency (a change to `pyproject.toml`) needs
   `H:\ai\engines\pii-redact\.venv\Scripts\python.exe -m pip install -e "F:\Github Repos\pii-redact-indian"`.
+- **Releases are tagged** `vX.Y.Z` (annotated tags, from `v0.2.0` on),
+  and `/health` reports the same version. This prints `v0.4.1` exactly
+  when the clone is at that release, or e.g. `v0.4.1-3-g1234abc` when it's
+  three commits past it:
+  ```powershell
+  git -C "F:\Github Repos\pii-redact-indian" describe --tags
+  ```
 - **Defaults.** `--home` defaults to `$env:PII_REDACT_HOME`, else
   `H:\ai\redaction`. The token file defaults to `<home>\service.token`.
 - **Logs go to stderr.** Redirect them if you want a file; they never
@@ -79,7 +86,7 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
 |---|---|---|
 | not running / not yet bound | connection refused | — |
 | warming up | 503 | `{"status": "starting", "ready": false}` |
-| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.4.0"}` |
+| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.4.1"}` |
 | warm-up failed (exits right after) | 503 | `{"status": "failed", "ready": false}` |
 
 **Readiness wait for `start-stack.ps1`:** poll `/health` every 1 s until

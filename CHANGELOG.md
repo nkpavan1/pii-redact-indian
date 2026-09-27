@@ -1,5 +1,22 @@
 # Changelog
 
+Releases are tagged `vX.Y.Z` in git, from `v0.2.0` on.
+
+## 0.4.1 (2026-09-27)
+
+A masking fix from the stack session's retest of 0.4.0. The HTTP contract
+is unchanged.
+
+### Fixed
+- **The label of an address ending in a PIN code was masked with it.**
+  `My address is 14 Test Lane, Sampleville, Bengaluru 560038.` became
+  `IN_ADDRESS_A.`. The label and the words leading into the address now
+  stay in the clear: `My address is IN_ADDRESS_A.`, `Please send it to
+  IN_ADDRESS_A.`
+- **One address got several codes,** one for each way it was introduced
+  (`My address is …`, `Address - …`, `Our office address is …`). They now
+  share one code.
+
 ## 0.4.0 (2026-09-27)
 
 Fixes for the stack session's black-box test of the 0.3.0 service. The
