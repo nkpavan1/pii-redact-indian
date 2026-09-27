@@ -63,7 +63,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -458,6 +458,35 @@ class MappingStore:
         with self._mutex:
             entry = self._snapshot_for_read().by_code.get(code)
             return _display_of(entry) if entry is not None else None
+
+    def entry_for(self, code: str) -> dict | None:
+        """A copy of the entry for `code` (entity_type, value, display, code),
+        or None."""
+        with self._mutex:
+            entry = self._snapshot_for_read().by_code.get(code)
+            return dict(entry) if entry is not None else None
+
+    def forget(self, codes: Collection[str]) -> list[dict]:
+        """Removes the entries for `codes`, in one transaction, and returns
+        copies of them. All or nothing: a code the store doesn't have raises
+        MappingStoreError and nothing is removed.
+
+        Afterwards those codes no longer reverse (text already redacted with
+        them can't be restored). The counters are left as they are, so a
+        removed code is never issued again - to anyone."""
+        wanted = set(codes)
+        with self._mutex, self.transaction():
+            snapshot = self._txn
+            missing = sorted(wanted - snapshot.by_code.keys())
+            if missing:
+                raise MappingStoreError(f"not in the store: {', '.join(missing)}")
+            removed = [dict(snapshot.by_code[code]) for code in sorted(wanted)]
+            snapshot.data["entries"] = [e for e in snapshot.data["entries"] if e["code"] not in wanted]
+            rebuilt = _Snapshot.build(snapshot.raw, snapshot.signature, snapshot.data)
+            snapshot.by_key, snapshot.by_code = rebuilt.by_key, rebuilt.by_code
+            snapshot.derived.clear()
+            self._txn_dirty = bool(removed)
+            return removed
 
     def derived(self, name: str, build: Callable[[Sequence[dict]], T]) -> T:
         """A value computed from the store's entries - a search index, say -

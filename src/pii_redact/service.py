@@ -2,12 +2,12 @@
 it goes to a cloud model and restores the codes in the reply (Tool 2 of
 Phase 7). A LiteLLM hook calls it; see HANDOFF.md for the contract.
 
-    redact-service [--port 8787] [--token-file PATH] [--home DIR] [--store PATH]
+    redact-service [--port 8787] [--token-file PATH] [--home DIR] [--store PATH | --ephemeral-store]
 
 Endpoints:
 - POST /v1/redact  {"texts": [...]} -> {"texts": [...], "entities": {TYPE: n}}
 - POST /v1/reverse {"texts": [...]} -> {"texts": [...]}
-- GET  /health     -> 200 {"status": "ok", "ready": true, "store_loaded": true, "version": ...}
+- GET  /health     -> 200 {"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": ...}
                       503 {"status": "starting" | "failed", "ready": false}
 
 Security properties, each one deliberate:
@@ -35,6 +35,15 @@ Concurrency: requests are handled on threads. Redaction is serialized by
 one processing lock (spaCy and Presidio are shared singletons). Reverse
 needs no NER, so it doesn't wait for that lock.
 
+Testing: `--ephemeral-store` runs the service against a throwaway store,
+so an end-to-end test suite never writes into the real one. Its key is
+random and exists only in this process's memory (no Credential Manager
+entry); its file lives in a new temporary folder that is deleted at exit
+(and is undecryptable if the process dies first). /health says
+`"ephemeral": true`, so a test can check what it is talking to before
+sending anything. It is refused on the default port, which belongs to the
+real service.
+
 Caching: a chat client re-sends the whole history every turn, so the slow
 half of redaction - detection - is cached per text (api.analyze_texts).
 The fast half - the known-value sweep and the codes - runs on every
@@ -46,6 +55,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
+import tempfile
 import hmac
 import json
 import logging
@@ -62,6 +73,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from cryptography.fernet import Fernet
 
 import pii_redact
 from pii_redact.anonymize.mapping_store import MappingStore, MappingStoreError
@@ -86,6 +99,8 @@ QUEUE_TIMEOUT_S = 300
 # this size are read and discarded first, so the client gets the JSON error.
 DRAIN_LIMIT_BYTES = 64 * 1024 * 1024
 DRAIN_TIMEOUT_S = 5
+
+EPHEMERAL_DIR_PREFIX = "pii-redact-ephemeral-"
 
 _ROUTES = ("/health", "/v1/redact", "/v1/reverse")
 _WARM_UP_TEXT = "Warm-up: Ravi Kumar, PAN ABCPE1234F, mobile 9876543210, ravi@example.com."
@@ -208,6 +223,7 @@ class RedactionService:
         threshold: float | None = None,
         cache_entries: int = DEFAULT_CACHE_ENTRIES,
         cache_detections: int = DEFAULT_CACHE_DETECTIONS,
+        ephemeral: bool = False,
     ):
         from pii_redact import api  # Presidio/spaCy load here, after the startup checks
 
@@ -218,6 +234,7 @@ class RedactionService:
         self.settings_key = json.dumps({"entities": sorted(self.entities), "threshold": self.threshold})
         self.cache = AnalysisCache(cache_entries, cache_detections)
         self.processing_lock = threading.Lock()
+        self.ephemeral = ephemeral
         # Plain attributes, read by /health without any lock.
         self.status = "starting"
         self.store_loaded = False
@@ -351,6 +368,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "ready": True,
                     "store_loaded": service.store_loaded,
+                    "ephemeral": service.ephemeral,
                     "version": pii_redact.__version__,
                 }, ""
             return HTTPStatus.SERVICE_UNAVAILABLE, {"status": service.status, "ready": False}, ""
@@ -491,6 +509,17 @@ def create_server(
     return ServiceServer(port, service, token, max_body_bytes)
 
 
+def open_ephemeral_store() -> tuple[MappingStore, Path]:
+    """A throwaway store in a new temporary folder, with a random key that
+    lives only in this process (never in the OS credential store). The
+    caller deletes the folder when done."""
+    folder = Path(tempfile.mkdtemp(prefix=EPHEMERAL_DIR_PREFIX))
+    store = MappingStore(
+        folder / paths.STORE_FILE_NAME, key=Fernet.generate_key(), cache=True, lock_timeout=STORE_LOCK_TIMEOUT_S
+    )
+    return store, folder
+
+
 # --- command line
 
 
@@ -503,7 +532,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port (default {DEFAULT_PORT})")
     parser.add_argument("--home", type=Path, default=None,
                         help=f"Redaction home (default: $env:{paths.HOME_ENV}, else {paths.DEFAULT_HOME})")
-    parser.add_argument("--store", type=Path, default=None, help="Mapping store (default: <home>\\mapping_store.enc)")
+    store_choice = parser.add_mutually_exclusive_group()
+    store_choice.add_argument("--store", type=Path, default=None, help="Mapping store (default: <home>\\mapping_store.enc)")
+    store_choice.add_argument("--ephemeral-store", action="store_true",
+                              help="Tests only: a throwaway store (random in-memory key, temporary folder deleted "
+                                   f"at exit). Refused on port {DEFAULT_PORT}.")
     parser.add_argument("--token-file", type=Path, default=None,
                         help=f"Bearer token file, first line (default: <home>\\{TOKEN_FILE_NAME}); "
                              f"${TOKEN_ENV} takes precedence when set")
@@ -520,36 +553,59 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     home = args.home if args.home is not None else paths.redaction_home()
+    ephemeral_folder: Path | None = None
     try:
-        check_host(args.host)
-        token = load_token(os.environ, args.token_file or home / TOKEN_FILE_NAME)
-        store = MappingStore(
-            args.store or home / paths.STORE_FILE_NAME, create=False, cache=True, lock_timeout=STORE_LOCK_TIMEOUT_S
-        )
-        store.load()
-    except (ConfigError, MappingStoreError) as exc:
-        print(f"redact-service: refusing to start: {exc}", file=sys.stderr)
-        return 2
+        try:
+            check_host(args.host)
+            if args.ephemeral_store and args.port == DEFAULT_PORT:
+                raise ConfigError(
+                    f"--ephemeral-store is refused on port {DEFAULT_PORT}, the real service's port "
+                    "(use another, e.g. --port 8788)"
+                )
+            token = load_token(os.environ, args.token_file or home / TOKEN_FILE_NAME)
+            if args.ephemeral_store:
+                store, ephemeral_folder = open_ephemeral_store()
+            else:
+                store = MappingStore(
+                    args.store or home / paths.STORE_FILE_NAME,
+                    create=False,
+                    cache=True,
+                    lock_timeout=STORE_LOCK_TIMEOUT_S,
+                )
+            store.load()
+        except (ConfigError, MappingStoreError) as exc:
+            print(f"redact-service: refusing to start: {exc}", file=sys.stderr)
+            return 2
+        if args.ephemeral_store:
+            log.warning(
+                "EPHEMERAL STORE: codes live only in this process and are lost when it exits "
+                "- for tests, never for real traffic"
+            )
 
-    service = RedactionService(store, threshold=args.threshold, cache_entries=args.cache_entries)
-    try:
-        server = create_server(service, token, port=args.port, max_body_bytes=args.max_body_bytes)
-    except OSError as exc:
-        print(f"redact-service: cannot listen on {LOOPBACK}:{args.port} ({exc.strerror})", file=sys.stderr)
-        return 2
-    if args.pid_file:
-        args.pid_file.write_text(str(os.getpid()), encoding="ascii")
-    log.info("listening on http://%s:%d (warming up)", LOOPBACK, server.server_port)
-    service.start_warm_up(on_failure=lambda: threading.Thread(target=server.shutdown, daemon=True).start())
-    try:
-        server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+        service = RedactionService(
+            store, threshold=args.threshold, cache_entries=args.cache_entries, ephemeral=args.ephemeral_store
+        )
+        try:
+            server = create_server(service, token, port=args.port, max_body_bytes=args.max_body_bytes)
+        except OSError as exc:
+            print(f"redact-service: cannot listen on {LOOPBACK}:{args.port} ({exc.strerror})", file=sys.stderr)
+            return 2
         if args.pid_file:
-            args.pid_file.unlink(missing_ok=True)
-    return 1 if service.status == "failed" else 0
+            args.pid_file.write_text(str(os.getpid()), encoding="ascii")
+        log.info("listening on http://%s:%d (warming up)", LOOPBACK, server.server_port)
+        service.start_warm_up(on_failure=lambda: threading.Thread(target=server.shutdown, daemon=True).start())
+        try:
+            server.serve_forever(poll_interval=0.5)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+            if args.pid_file:
+                args.pid_file.unlink(missing_ok=True)
+        return 1 if service.status == "failed" else 0
+    finally:
+        if ephemeral_folder is not None:
+            shutil.rmtree(ephemeral_folder, ignore_errors=True)
 
 
 if __name__ == "__main__":

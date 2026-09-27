@@ -79,7 +79,7 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
 |---|---|---|
 | not running / not yet bound | connection refused | — |
 | warming up | 503 | `{"status": "starting", "ready": false}` |
-| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "version": "0.3.0"}` |
+| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.3.0"}` |
 | warm-up failed (exits right after) | 503 | `{"status": "failed", "ready": false}` |
 
 **Readiness wait for `start-stack.ps1`:** poll `/health` every 1 s until
@@ -108,13 +108,42 @@ Stop-Process -Id (Get-Content H:\ai\redaction\service.pid)
   next start overwrites it.
 - **Foreground:** Ctrl+C.
 
+**Testing against a throwaway store** (for the end-to-end suite, so it
+never writes synthetic entries into the real store):
+
+```powershell
+& "H:\ai\engines\pii-redact\.venv\Scripts\python.exe" -m pii_redact.service `
+    --ephemeral-store --port 8788 --home H:\ai\redaction
+```
+
+- **The store.** It's a real, encrypted store, so tests exercise the real
+  code, but:
+  - its key is random and lives only in that process's memory, with **no
+    Credential Manager entry**;
+  - its file is in a new `%TEMP%\pii-redact-ephemeral-*` folder;
+  - it starts empty.
+- **Leaving no trace.** Ctrl+C deletes the folder. After a hard kill
+  (`Stop-Process`) the folder stays behind, but nobody can decrypt it, since
+  the key died with the process; delete it at leisure.
+- **`/health` says `"ephemeral": true`.** A test suite should check this
+  before sending anything.
+- **Refused on port 8787,** the real service's port (exit code 2).
+- **Token.** Same rules as the real service: `$env:PII_REDACT_SERVICE_TOKEN`
+  or `--token-file`, else `<home>\service.token`. With `--home
+  H:\ai\redaction` it uses the real token, so the suite's token handling is
+  unchanged.
+- **Verified with the stack's own scripts.** `redact_service_tests.py` and
+  `redact_name_probe.py`, changed only to port 8788, pass against it: 14/14,
+  and 60/60 names masked.
+
 ## 3. HTTP contract
 
 Base URL `http://127.0.0.1:8787`. The service binds 127.0.0.1 only; WSL
 reaches it through mirrored networking.
 
 **Auth:** `/v1/*` require `Authorization: Bearer <token>`. `/health` needs
-none.
+none. Its `ephemeral` field is `true` only for a service started with
+`--ephemeral-store` (section 2).
 
 **`POST /v1/redact`**
 
@@ -316,7 +345,8 @@ token.
   (`IN_PAN_A`, `EMAIL_ADDRESS_A`, `{"IN_PAN": 1}`), not `PAN_A` or `EMAIL_B`.
   This keeps existing stores compatible.
 - **`/health` has a `ready` field** and a `starting`/`failed` status, per
-  the later amendment.
+  the later amendment, and an `ephemeral` field (0.4.0) for test
+  services.
 - **No automatic store creation.** A store must be created once with
   `redact-key init`; the service and `redact-publish` never create one.
   This prevents a second store silently issuing the same codes for

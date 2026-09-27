@@ -231,6 +231,9 @@ redact-service --port 8787 --home H:\ai\redaction
   least 32 characters.
 - `GET /health` needs no auth. It returns 503 until the NLP model is loaded
   and warmed up, then 200.
+- `--ephemeral-store` runs it against a throwaway store (random in-memory
+  key, deleted at exit) for end-to-end tests. It's refused on the default
+  port.
 - Logs hold request ids, counts and latency, never text. Nothing from a
   request is written to disk.
 
@@ -255,7 +258,12 @@ redact-key init                           # one time: new empty store + key
 redact-key check                          # key present? decrypts the store? (never shows the key)
 redact-key export --clip --i-understand   # back the key up to your password manager
 redact-key import                         # restore it (hidden prompt); refuses a key that doesn't decrypt the store
+redact-key forget --code PERSON_F         # remove an entry (shows it and asks first); its code never reverses again
 ```
+
+`forget` is for test data, or a value that should never have been stored.
+Anything the store knows is masked everywhere it appears, so a wrongly
+stored "name" matters. A removed code is never issued again.
 
 `export --clip` copies the key without adding it to clipboard history
 (Win+V) or cloud clipboard sync, and clears the clipboard once you press

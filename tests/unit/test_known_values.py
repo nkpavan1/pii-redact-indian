@@ -333,3 +333,10 @@ def test_analyzing_a_document_writes_nothing_to_the_store(tmp_path, store):
     analyze_document(note, None, store)
     assert store.all_codes() == {}
     assert len(store_index(store)) == 0
+
+
+def test_a_forgotten_name_is_no_longer_swept(store):
+    redact_texts(["Periwinkle Zanzibar called."], store)
+    assert redact_texts([UNSEEN_BY_NER], store)[0].text == "Ask PERSON_A about it."
+    store.forget(["PERSON_A"])
+    assert redact_texts([UNSEEN_BY_NER], store)[0].text == UNSEEN_BY_NER

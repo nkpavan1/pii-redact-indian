@@ -287,3 +287,68 @@ def test_keytool_does_not_load_presidio():
     probe = "import sys, pii_redact.keytool; print('presidio_analyzer' in sys.modules, 'spacy' in sys.modules)"
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "False False"
+
+
+# --- forget
+
+
+def _with_entries(fake_keyring, store_path):
+    key = _initialized(fake_keyring, store_path)
+    store = MappingStore(store_path, key=key.encode(), create=False)
+    with store.transaction():
+        for value in ("Ping Ravi Kumar", "Asha Rao", "Periwinkle"):
+            store.get_or_create_code("PERSON", value.upper(), display=value)
+    return key, store
+
+
+def test_forget_removes_entries_after_showing_them(store_path, fake_keyring, capsys, monkeypatch):
+    key, store = _with_entries(fake_keyring, store_path)
+    capsys.readouterr()
+    monkeypatch.setattr(keytool, "_is_interactive", lambda **_: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+
+    code, out, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A", "--code", "PERSON_C"], capsys)
+
+    assert code == 0
+    assert "Ping Ravi Kumar" in err and "Periwinkle" in err  # shown before asking
+    assert out == ""
+    assert key not in out + err
+    fresh = MappingStore(store_path, key=key.encode(), create=False)
+    assert fresh.all_codes() == {"PERSON_B": "Asha Rao"}
+    # A removed code is never issued again.
+    assert fresh.get_or_create_code("PERSON", "NEW PERSON") == "PERSON_D"
+
+
+def test_forget_does_nothing_unless_confirmed(store_path, fake_keyring, capsys, monkeypatch):
+    key, store = _with_entries(fake_keyring, store_path)
+    monkeypatch.setattr(keytool, "_is_interactive", lambda **_: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    code, _, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A"], capsys)
+    assert code == 1 and "Nothing was removed" in err
+    assert len(MappingStore(store_path, key=key.encode(), create=False).all_codes()) == 3
+
+
+def test_forget_refuses_unknown_codes_and_removes_nothing(store_path, fake_keyring, capsys, monkeypatch):
+    key, store = _with_entries(fake_keyring, store_path)
+    code, _, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A", "--code", "PERSON_Z", "--yes"], capsys)
+    assert code == 1 and "PERSON_Z" in err
+    assert len(MappingStore(store_path, key=key.encode(), create=False).all_codes()) == 3
+
+
+def test_forget_needs_a_terminal_or_yes_and_yes_prints_no_values(store_path, fake_keyring, capsys, monkeypatch):
+    key, store = _with_entries(fake_keyring, store_path)
+    capsys.readouterr()
+    monkeypatch.setattr(keytool, "_is_interactive", lambda **_: False)
+    code, _, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A"], capsys)
+    assert code == 1 and "--yes" in err
+
+    code, out, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A", "--yes"], capsys)
+    assert code == 0
+    assert "PERSON_A" in err and "Ravi" not in out + err
+    assert "PERSON_A" not in MappingStore(store_path, key=key.encode(), create=False).all_codes()
+
+
+def test_forget_needs_an_existing_store(store_path, fake_keyring, capsys):
+    code, _, err = _run(["forget", "--store", str(store_path), "--code", "PERSON_A", "--yes"], capsys)
+    assert code == 1
+    assert "redact-key init" in err

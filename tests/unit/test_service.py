@@ -112,7 +112,13 @@ def test_v1_endpoints_are_503_before_warm_up(running):
 def test_health_after_warm_up_needs_no_auth(ready):
     status, body, _ = _call(ready.port, "GET", "/health", token=None)
     assert status == 200
-    assert body == {"status": "ok", "ready": True, "store_loaded": True, "version": service.pii_redact.__version__}
+    assert body == {
+        "status": "ok",
+        "ready": True,
+        "store_loaded": True,
+        "ephemeral": False,
+        "version": service.pii_redact.__version__,
+    }
 
 
 def test_warm_up_issues_no_codes(ready, store):
@@ -520,3 +526,72 @@ def test_main_refuses_without_an_initialized_store(tmp_path, monkeypatch, fake_k
     err = capsys.readouterr().err
     assert "redact-key init" in err
     assert TOKEN not in err
+
+
+# --- ephemeral store (for end-to-end test suites)
+
+
+def test_main_refuses_an_ephemeral_store_on_the_default_port(monkeypatch, capsys):
+    monkeypatch.setenv("PII_REDACT_SERVICE_TOKEN", TOKEN)
+    assert service.main(["--ephemeral-store"]) == 2
+    assert service.main(["--ephemeral-store", "--port", str(service.DEFAULT_PORT)]) == 2
+    err = capsys.readouterr().err
+    assert "real service's port" in err
+    assert TOKEN not in err
+
+
+def test_ephemeral_store_and_store_are_mutually_exclusive(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        service.main(["--ephemeral-store", "--store", str(tmp_path / "x.enc"), "--port", "0"])
+
+
+def test_main_runs_on_an_ephemeral_store_and_leaves_nothing_behind(tmp_path, monkeypatch):
+    # No fake_keyring: the autouse guard fails the test if the OS credential
+    # store is touched at all. The token comes from the environment, and
+    # --home points at an empty folder, so no real file is involved.
+    monkeypatch.setenv("PII_REDACT_SERVICE_TOKEN", TOKEN)
+    home = tmp_path / "home"
+    home.mkdir()
+    seen = {}
+
+    def serve_once(self, poll_interval=0.5):
+        thread = threading.Thread(target=service.ThreadingHTTPServer.serve_forever, args=(self, 0.05), daemon=True)
+        thread.start()
+        deadline = time.time() + 60
+        while not self.service.ready and time.time() < deadline:
+            time.sleep(0.05)
+        seen["folder"] = self.service.store.store_path.parent
+        seen["health"] = _call(self.server_port, "GET", "/health", token=None)[:2]
+        seen["redact"] = _call(self.server_port, "POST", "/v1/redact", {"texts": [NOTE]})[:2]
+        seen["reverse"] = _call(self.server_port, "POST", "/v1/reverse", {"texts": ["PERSON_A"]})[:2]
+        seen["store_written"] = self.service.store.store_path.is_file()
+        self.shutdown()
+
+    monkeypatch.setattr(service.ServiceServer, "serve_forever", serve_once)
+    assert service.main(["--ephemeral-store", "--port", "0", "--home", str(home)]) == 0
+
+    status, health = seen["health"]
+    assert status == 200 and health["ephemeral"] is True and health["ready"] is True
+    assert seen["redact"][1]["texts"] == ["PERSON_A, PAN IN_PAN_A, asked about the loan."]
+    assert seen["reverse"][1]["texts"] == ["Ravi Kumar"]
+    assert seen["store_written"] is True  # a real encrypted store, just a throwaway one
+    assert seen["folder"].name.startswith(service.EPHEMERAL_DIR_PREFIX)
+    assert not seen["folder"].exists()  # deleted at exit
+    assert list(home.iterdir()) == []  # nothing written to the redaction home
+
+
+def test_each_ephemeral_store_is_new_and_has_its_own_key():
+    first, first_folder = service.open_ephemeral_store()
+    second, second_folder = service.open_ephemeral_store()
+    try:
+        first.get_or_create_code("PERSON", "RAVI KUMAR", display="Ravi Kumar")
+        assert first_folder != second_folder
+        assert second.all_codes() == {}
+        # The other store's key can't read this one's file.
+        with pytest.raises(service.MappingStoreError):
+            MappingStore(first.store_path, key=Fernet.generate_key()).load()
+    finally:
+        import shutil
+
+        shutil.rmtree(first_folder, ignore_errors=True)
+        shutil.rmtree(second_folder, ignore_errors=True)

@@ -1,4 +1,5 @@
-"""redact-key: set up, check, back up and restore the mapping store's key.
+"""redact-key: set up, check, back up and restore the mapping store's key,
+and remove entries from the store.
 
 The key lives in the OS credential store (Windows Credential Manager),
 bound to the store file's resolved path. Without it, every code in the
@@ -9,12 +10,19 @@ manager, and back up the (encrypted) store file itself as well.
     redact-key init   [--store PATH]
     redact-key export [--store PATH] --i-understand [--clip]
     redact-key import [--store PATH] [--replace]
+    redact-key forget [--store PATH] --code CODE [--code CODE ...] [--yes]
 
 Meant to be run by a person, at a terminal - never by an agent or a script.
 No command prints the key except `export` without `--clip`, and `export`
 only runs on an interactive terminal with --i-understand. `import` reads
 the key without echoing it, and refuses a key that can't decrypt the
 existing store, so a wrong paste can't replace a working key.
+
+`forget` removes entries by code - test data, or a value that should never
+have been stored (an NER mistake that the known-value sweep would
+otherwise mask everywhere). On a terminal it shows each entry, value
+included, and asks first; `--yes` skips the question and prints codes
+only. A removed code no longer reverses and is never issued again.
 
 Imports nothing heavy (no Presidio/spaCy), so it starts instantly.
 """
@@ -202,10 +210,47 @@ def _import(store_path: Path, *, replace: bool) -> int:
     return EXIT_OK
 
 
+def _forget(store_path: Path, codes: list[str], *, assume_yes: bool) -> int:
+    if not assume_yes and not _is_interactive(needs_stdout=False):
+        _say("Refusing: forget asks for confirmation on an interactive terminal; pass --yes to skip it.")
+        return EXIT_PROBLEM
+    try:
+        store = MappingStore(store_path, create=False)
+        entries = {code: store.entry_for(code) for code in dict.fromkeys(codes)}
+    except MappingStoreError as exc:
+        _say(str(exc))
+        return EXIT_PROBLEM
+    missing = [code for code, entry in entries.items() if entry is None]
+    if missing:
+        _say(f"{store_path}: not in the store: {', '.join(missing)}. Nothing was removed.")
+        return EXIT_PROBLEM
+
+    if not assume_yes:
+        _say(f"{store_path}: these entries will be removed:")
+        for code, entry in entries.items():
+            _say(f"  {code}  ({entry['entity_type']})  {entry.get('display') or entry['value']}")
+        _say("Their codes will no longer reverse, and are never issued again.")
+        try:
+            answer = input(f"Remove {len(entries)} entr{'y' if len(entries) == 1 else 'ies'}? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            _say("Nothing was removed.")
+            return EXIT_PROBLEM
+
+    try:
+        removed = store.forget(list(entries))
+    except MappingStoreError as exc:
+        _say(f"{exc}. Nothing was removed.")
+        return EXIT_PROBLEM
+    _say(f"{store_path}: removed {', '.join(e['code'] for e in removed)}.")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="redact-key",
-        description="Set up, check, back up and restore the mapping store's encryption key.",
+        description="Set up, check, back up and restore the mapping store's encryption key; remove store entries.",
     )
     store_help = (
         f"Mapping store file (default: $env:{HOME_ENV}\\mapping_store.enc, else "
@@ -223,7 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
     restore = commands.add_parser("import", help="Restore the key from a backup (read from stdin).")
     restore.add_argument("--replace", action="store_true",
                          help="Overwrite a different key already stored for this store.")
-    for command in (check, init, export, restore):
+    forget = commands.add_parser("forget", help="Remove entries from the store by code (asks first).")
+    forget.add_argument("--code", dest="codes", action="append", required=True,
+                        help="A code to remove, e.g. PERSON_F. Repeat for several.")
+    forget.add_argument("--yes", action="store_true",
+                        help="Don't ask (and don't show the values); for scripts.")
+    for command in (check, init, export, restore, forget):
         command.add_argument("--store", type=Path, default=None, help=store_help)
     return parser
 
@@ -237,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init(store_path)
     if args.command == "export":
         return _export(store_path, confirmed=args.confirmed, to_clipboard=args.clip)
+    if args.command == "forget":
+        return _forget(store_path, args.codes, assume_yes=args.yes)
     return _import(store_path, replace=args.replace)
 
 

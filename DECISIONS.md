@@ -905,3 +905,64 @@ p50):
 The history case pays for the sweep and code lookup now running on all 20
 cached messages (+17 ms). The rest is within 3%, about the run-to-run
 spread seen in step 12.
+
+## Step 15: a throwaway store for end-to-end tests; `redact-key forget`
+
+**Request 4a: `redact-service --ephemeral-store`.**
+- **A real, encrypted store,** so the end-to-end suite exercises the real
+  code paths. Its key is `Fernet.generate_key()`, held only in the
+  process: it never touches Credential Manager (the unit test runs under
+  the keyring guard, so any keyring call would fail it). Its file lives in
+  a new `%TEMP%\pii-redact-ephemeral-*` folder, deleted on a clean exit.
+- **After a hard kill** (`Stop-Process` is TerminateProcess, so no cleanup
+  code runs) the folder stays. Nobody can decrypt it, because the key died
+  with the process; delete it at leisure. Not deleting other processes'
+  leftovers at startup was deliberate: two test services on different
+  ports would delete each other's live store.
+- **Refused on the default port 8787** (exit code 2). Started there by
+  mistake while the real service is down, it would quietly take real chat
+  traffic and issue codes that vanish at exit.
+- **`/health` gains `"ephemeral": true|false`,** so a suite can check what
+  it's talking to before it sends anything. This is the only contract
+  change of this round, and it's additive.
+- **The token works as for the real service,** so the stack's scripts need
+  only a different port.
+- **Verified black-box:** the stack's own `redact_service_tests.py` and
+  `redact_name_probe.py`, copied with only the port and token source
+  changed, were run against a real `--ephemeral-store` process on port
+  8788, with a generated token. Result: **14/14** (S4, which failed on
+  0.3.0, passes) and **60/60** names fully masked, one code per name. The
+  token appeared in neither the scripts' output nor the service log.
+
+**Request 4b: the synthetic entries in the real store.**
+- **Leaving them is harmless.**
+  - The codes `PERSON_A`–`Q`, `IN_PAN_A`, `PHONE_NUMBER_A`,
+    `EMAIL_ADDRESS_A`, `IN_AADHAAR_A` and `IN_ADDRESS_A` are just used up;
+    real values start after them.
+  - The clean synthetic names ("Ravi Kumar", "Asha Rao", "Priya Sharma",
+    ...) are also common real names. A real person with exactly that name
+    shares the code, which is the store's normal same-value-same-code
+    behavior, and is masked anyway.
+  - The glued entries ("Ping Ravi Kumar", "Customer Periwinkle Zanzibar")
+    are dead weight. Step 13 no longer produces those spans, and step 14
+    never sweeps them (they start with a glue word).
+  - Single-word partials ("Periwinkle", "NARAYANAN") are never swept.
+- **To remove them anyway,** there's a new command: `redact-key forget
+  --code CODE ...`.
+  - On a terminal it shows each entry (code, type, value) and asks first.
+    `--yes` skips the question and prints codes only.
+  - Unknown codes abort with nothing removed.
+  - Removed codes no longer reverse. Counters are untouched, so a removed
+    code is never issued again.
+  - A running service notices the file change and drops the removed
+    values from its sweep (tested).
+  - It matters beyond test data: with the sweep, a value that should
+    never have been stored (an NER mistake) is masked everywhere, and this
+    is how to take it out.
+  - Pavan runs it himself; it's never run here. The command for the
+    stack's codes is in the round-3 report.
+
+**Gaps and caveats**
+- **`forget` can't list the store.** To find a code you need the text it
+  appeared in, or `/v1/reverse`. That's deliberate: a listing command
+  would print every stored value.
