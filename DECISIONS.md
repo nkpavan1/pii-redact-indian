@@ -691,3 +691,98 @@ table.**
 - **Other phone-code keys merge:** existing `+91…` or `0…` phone codes now
   share one code with the bare 10-digit form. There's no store on `H:` yet,
   so nothing is split in practice.
+
+---
+
+# Review round 3 (stack session black-box test of the 0.3.0 service)
+
+The stack session tested the running 0.3.0 service over HTTP from WSL,
+synthetic data only (`H:\ai\setup\reviews\pii-redact-0.3.0-service-test.md`).
+The HTTP contract passed completely. Three detection issues, a request for
+a throwaway test store, and a first-request timing question. Steps 13–16
+below.
+
+Reproduced first, in-process against a throwaway store, with the stack's
+own probe: 6 names × 10 sentence frames gave 58 fully masked, 1 partial
+and 1 missed, and every name got two or three codes. Same numbers as the
+stack's.
+
+## Step 13: PERSON spans: trim glued words, extend names cut short
+
+**What spaCy actually does** (probed per token, synthetic names, 20 sentence
+frames):
+- **A sentence-initial word is swallowed into the name:** "Ping Ravi
+  Kumar", "Customer …", "Email …", "Remind …", "Call …", "Dear …". The
+  tagger calls "Ping", "Dear" and "Pay" proper nouns there, so it can't be
+  what decides.
+- **A name is cut short:** "Ping Periwinkle" + "Zanzibar", "Periwinkle" +
+  "Zanzibar", "NARAYANAN" without "LAKSHMI".
+- **Missed entirely,** even for ordinary Indian names: "Pay Ram Kumar 500
+  rupees", "PRIYA SHARMA PAID THE BILL", and many frames with the
+  unfamiliar "Periwinkle Zanzibar" (tagged GPE or ORG, or nothing). Step 14.
+- **Found while probing: a name run on into an identifier.** "Ravi Kumar
+  PAN ABCPE1234F" and "Ravi Kumar UPI 9876543210" come back as one PERSON
+  span each. 0.3.0 dropped any PERSON span containing a digit, so **the
+  name leaked**. A pre-existing bug, not in the stack's report.
+
+**Decisions** (`detect/person_spans.py`, applied to every PERSON result,
+including the title-anchored recognizer's, so documents and chat both get
+it)
+- **Cut at the first word with a digit** instead of dropping the span. The
+  words before it are kept if they're still a plausible name:
+  - two words or more; or
+  - a name followed by a label that gets trimmed ("Ravi PAN …").
+  A lone word before a number with no label ("Form 16", "Q4(Jan-Mar)") is
+  dropped, as before.
+- **Trim with a curated list, not the tagger.** Words that are never a name
+  are removed from either edge, repeatedly: greetings, contact verbs,
+  roles, statement vocabulary, days, months, bank names, business
+  suffixes. Titles are removed from the front only ("Kumari" is a surname
+  after a name).
+  - Words that are also given names are **deliberately left out**: Ram,
+    Bill, Will, Mark, Rose, Sunny, and the months Jan, Mar, April, May,
+    June and August. There's a test that they stay out.
+  - Trimming is the only step that can unmask a word, so it never guesses.
+  - A span with nothing left is dropped ("Dear Sir").
+- **Extend over the rest of the name, using the tagger.** An adjacent word
+  joins the name only when all of these hold:
+  - spaCy tags it `PROPN`;
+  - only spaces separate it from the name (no punctuation, no line break,
+    and so never across the ` | ` of a PDF context window);
+  - it's letters only, 2+ characters;
+  - its case matches the name's: Title-case next to Title-case, all caps
+    next to all caps, never next to a lower-case name;
+  - it's not a stop word, a listed word or a title;
+  - it's not part of a DATE, TIME, number or ORG entity.
+  At most two words per side. Here the tagger does help: "PAID" is VERB,
+  "LAKSHMI" is PROPN.
+  - Place entities (GPE) are allowed to join, because surnames that are
+    place names get tagged GPE ("Zanzibar"). Extending can only mask more,
+    so a wrong guess costs a second code, never a leak.
+- **Overlapping PERSON spans are merged** into one.
+- **No second NLP pass.** `_analyze_one` computes the spaCy Doc once,
+  hands it to `analyze(nlp_artifacts=…)` and refines against it.
+
+**Result.** The stack's probe, widened to 12 names × 10 frames: every name
+gets exactly one code, with no partial masks. The 8 remaining misses are
+sentences where NER finds no name at all (step 14 covers those for
+anyone already known). "Ravi Kumar PAN ABCPE1234F" is now `PERSON_A PAN
+IN_PAN_A`.
+
+**Not done: "map a new PERSON value to an existing entry it contains."**
+The stack suggested it as an alternative. With "Ravi Kumar" known, a new
+span "Ravi Kumar Sharma" would become `PERSON_A Sharma`: a leak, and the
+wrong person. So a span that contains a known name but also has an extra,
+unlisted word keeps its full span and gets its own code. Unlisted glue
+words therefore still split a person into two codes. The fix for one of
+those is adding the word to the list, which is a one-line change with a
+test.
+
+**Gaps and caveats**
+- **Unknown names that NER misses entirely are still missed** on first
+  sight ("Tell Periwinkle Zanzibar to call me"). Step 14 only helps once a
+  name is known.
+- **Over-extension (safe direction).** A capitalized word right after a
+  name, not on the list and tagged PROPN, joins it ("Ravi Kumar Zanzibar
+  Traders" stops at "Traders", but an unlisted business word wouldn't).
+  The cost is an extra code, not a leak.

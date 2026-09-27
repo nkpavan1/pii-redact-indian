@@ -54,7 +54,6 @@ threshold and this threshold does not pretend to solve it.
 
 from __future__ import annotations
 
-import re
 from functools import lru_cache
 
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
@@ -65,6 +64,7 @@ from presidio_analyzer.predefined_recognizers import (
     InVoterRecognizer,
 )
 
+from pii_redact.detect.person_spans import refine_person_results
 from pii_redact.detect.recognizers import AADHAAR_REPLACEMENT_ENTITY, get_custom_recognizers
 from pii_redact.types import Detection, TextBlock
 
@@ -138,35 +138,6 @@ def get_analyzer() -> AnalyzerEngine:
     return AnalyzerEngine(registry=_build_registry())
 
 
-def _looks_like_a_person_name(text: str) -> bool:
-    """Plausibility filter on spaCy's PERSON entity, same spirit as this
-    project's other validate_result-style checksum/format checks: a real
-    person's name never contains a digit.
-
-    Found via a real end-to-end test, not a unit test in isolation:
-    spaCy's NER misclassifies short, decontextualized, non-sentence-like
-    strings as PERSON with high confidence - confirmed directly on a
-    quarter label from an AIS document, "Q4(Jan-Mar)", tagged PERSON at
-    0.85 both with and without surrounding context (so this is not a
-    context-window side effect - it happens on the bare block-alone pass
-    too, and would have existed even before context windowing was added,
-    just never surfaced by a document that happened to trigger it)."""
-    return not any(c.isdigit() for c in text)
-
-
-# spaCy's PERSON span swallows a trailing possessive ("Ravi Kumar's" -> one
-# span, confirmed by direct probe). Left in, it becomes part of the
-# mapping-store key, so "Ravi Kumar" and "Ravi Kumar's" would get two
-# different codes for one person, and reversal would reinsert the "'s"
-# after a code the LLM already wrote as "PERSON_A's".
-_PERSON_POSSESSIVE_SUFFIX = re.compile(r"['’][sS]?$")
-
-
-def _person_span_end(text: str, start: int, end: int) -> int:
-    match = _PERSON_POSSESSIVE_SUFFIX.search(text[start:end])
-    return start + match.start() if match else end
-
-
 def _chunk_bounds(text: str) -> list[tuple[int, int]]:
     bounds = []
     start, n = 0, len(text)
@@ -184,17 +155,26 @@ def _chunk_bounds(text: str) -> list[tuple[int, int]]:
     return bounds
 
 
-def _analyze(text: str, entities: list[str], language: str, score_threshold: float) -> list[RecognizerResult]:
+def _analyze_one(text: str, entities: list[str], language: str, score_threshold: float) -> list[RecognizerResult]:
+    """One analyze() call, with PERSON spans refined against the same spaCy
+    Doc the analyzer used (see person_spans.py) - computed once here and
+    handed to analyze(), so refining costs no second NLP pass."""
     analyzer = get_analyzer()
+    artifacts = analyzer.nlp_engine.process_text(text, language)
+    results = analyzer.analyze(
+        text=text, entities=entities, language=language, score_threshold=score_threshold, nlp_artifacts=artifacts
+    )
+    return refine_person_results(text, results, artifacts.tokens)
+
+
+def _analyze(text: str, entities: list[str], language: str, score_threshold: float) -> list[RecognizerResult]:
     if len(text) <= _CHUNK_CHARS:
-        return analyzer.analyze(text=text, entities=entities, language=language, score_threshold=score_threshold)
+        return _analyze_one(text, entities, language, score_threshold)
     results = []
     for start, end in _chunk_bounds(text):
         window_start = max(0, start - _CHUNK_OVERLAP_CHARS)
         window_end = min(len(text), end + _CHUNK_OVERLAP_CHARS)
-        for r in analyzer.analyze(
-            text=text[window_start:window_end], entities=entities, language=language, score_threshold=score_threshold
-        ):
+        for r in _analyze_one(text[window_start:window_end], entities, language, score_threshold):
             if start <= window_start + r.start < end:
                 results.append(
                     RecognizerResult(r.entity_type, window_start + r.start, window_start + r.end, r.score)
@@ -241,13 +221,8 @@ def detect_in_block(
     # the same (reported) type must not be counted twice.
     detections: dict[tuple[str, int, int], Detection] = {}
     for r in results:
-        r_end = r.end
-        if r.entity_type == "PERSON":
-            if not _looks_like_a_person_name(text[r.start : r.end]):
-                continue
-            r_end = _person_span_end(text, r.start, r.end)
         start = max(r.start, block_start)
-        end = min(r_end, block_end)
+        end = min(r.end, block_end)
         if start >= end:
             continue  # no overlap with this block at all
         entity_type = _REPORTED_AS.get(r.entity_type, r.entity_type)
