@@ -81,6 +81,16 @@ def _call(port, method, path, payload=None, *, token=TOKEN, raw_body=None, heade
     return response.status, (json.loads(data) if data else None), response
 
 
+def _logged(caplog, requests: int) -> str:
+    """The captured log once it has a line for each of `requests` requests.
+    The service logs a request after replying to it, so a client can get
+    ahead of the log; checking right away could miss the last line."""
+    deadline = time.monotonic() + 5
+    while caplog.text.count("req=") < requests and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return caplog.text
+
+
 def _raw(port, request: bytes) -> bytes:
     with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
         sock.sendall(request)
@@ -257,7 +267,7 @@ def test_query_strings_are_ignored_and_never_logged(ready, caplog):
     caplog.set_level(logging.INFO, logger="pii_redact.service")
     status, _, _ = _call(ready.port, "POST", f"/v1/redact?note={MARKER}", {"texts": ["hello"]})
     assert status == 200
-    assert MARKER not in caplog.text
+    assert MARKER not in _logged(caplog, 1)
 
 
 # --- no content in logs or on disk
@@ -271,7 +281,7 @@ def test_logs_never_contain_input_or_output_text(ready, caplog):
     _call(ready.port, "POST", "/v1/redact", raw_body=b"{" + MARKER.encode())
     _raw(ready.port, f"GARBAGE {MARKER}\r\n\r\n".encode())
 
-    logged = caplog.text
+    logged = _logged(caplog, 4)
     for forbidden in (MARKER, "Ravi", "ABCPE1234F", "PERSON_A", TOKEN):
         assert forbidden not in logged
     assert "route=/v1/redact status=200 texts=1 entities=IN_PAN:1,PERSON:1 cache_hits=0" in logged
@@ -317,7 +327,7 @@ def test_repeated_history_is_served_from_the_cache(ready, monkeypatch, caplog):
     assert second["texts"][:2] == first["texts"]
     assert second["texts"][2] == "Thanks, PERSON_A."
     assert second["entities"] == {"PERSON": 3, "IN_PAN": 1}
-    assert "cache_hits=2" in caplog.text
+    assert "cache_hits=2" in _logged(caplog, 2)
 
 
 # NER finds no name in this sentence; only the known-value sweep masks it.
