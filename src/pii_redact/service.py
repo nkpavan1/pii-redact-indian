@@ -25,15 +25,21 @@ Security properties, each one deliberate:
   without create, so a wrong path or missing key stops startup instead of
   silently starting a second store.
 - Nothing from a request is persisted or logged. Logs carry a request id,
-  route, status, counts and latency. The result cache lives in memory,
-  holds hashes as keys (never input text), and is dropped whenever another
-  process changes the store.
+  route, status, counts and latency. The analysis cache lives in memory
+  and holds hashes as keys and detections (offsets and entity types) as
+  values - never input text.
 - /health never waits on the lock that serializes redaction, so a long
   request can't make a health check time out.
 
 Concurrency: requests are handled on threads. Redaction is serialized by
 one processing lock (spaCy and Presidio are shared singletons). Reverse
 needs no NER, so it doesn't wait for that lock.
+
+Caching: a chat client re-sends the whole history every turn, so the slow
+half of redaction - detection - is cached per text (api.analyze_texts).
+The fast half - the known-value sweep and the codes - runs on every
+request (api.redact_analyzed), so a cached text still picks up a name the
+store learned since, from this service or from another process.
 """
 
 from __future__ import annotations
@@ -67,7 +73,7 @@ LOOPBACK = "127.0.0.1"
 DEFAULT_PORT = 8787
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_CACHE_ENTRIES = 2000
-DEFAULT_CACHE_CHARS = 64 * 1024 * 1024
+DEFAULT_CACHE_DETECTIONS = 1_000_000
 TOKEN_ENV = "PII_REDACT_SERVICE_TOKEN"
 TOKEN_FILE_NAME = "service.token"
 MIN_TOKEN_CHARS = 32
@@ -133,54 +139,61 @@ def load_token(environ: Mapping[str, str], token_file: Path) -> str:
     return token
 
 
-# --- result cache
+# --- analysis cache
 
 
-class ResultCache:
-    """In-memory LRU of redaction results, bounded by entry count and by
-    total characters stored. Keys are SHA-256 hashes over the settings and
-    the text, so the cache never holds input text, and a result computed
-    under different settings can never be returned. Never persisted."""
+class AnalysisCache:
+    """In-memory LRU of detection results (api.Analysis: entity types and
+    offsets), bounded by entry count and by total detections stored. Keys
+    are SHA-256 hashes over the settings and the text, so the cache never
+    holds input text, and a result computed under different settings can
+    never be returned. Never persisted.
 
-    def __init__(self, max_entries: int, max_chars: int):
+    Detection doesn't depend on the mapping store, so nothing here goes
+    stale when the store changes (redaction itself is never cached)."""
+
+    def __init__(self, max_entries: int, max_detections: int):
         self.max_entries = max_entries
-        self.max_chars = max_chars
-        self.generation: int | None = None
-        self._entries: OrderedDict[str, tuple[str, dict[str, int]]] = OrderedDict()
-        self._chars = 0
+        self.max_detections = max_detections
+        self._entries: OrderedDict[str, tuple] = OrderedDict()
+        self._size = 0
         self._lock = threading.Lock()
 
     @staticmethod
     def key(settings_key: str, text: str) -> str:
         return hashlib.sha256(f"{settings_key}\0{text}".encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _size_of(analysis: tuple) -> int:
+        return len(analysis) + 1
+
     def __len__(self) -> int:
         return len(self._entries)
 
-    def get(self, key: str) -> tuple[str, dict[str, int]] | None:
+    def get(self, key: str) -> tuple | None:
         with self._lock:
             value = self._entries.get(key)
             if value is not None:
                 self._entries.move_to_end(key)
             return value
 
-    def put(self, key: str, value: tuple[str, dict[str, int]]) -> None:
-        size = len(value[0])
-        if self.max_entries <= 0 or size > self.max_chars:
+    def put(self, key: str, analysis: tuple) -> None:
+        size = self._size_of(analysis)
+        if self.max_entries <= 0 or size > self.max_detections:
             return
         with self._lock:
             if key in self._entries:
-                self._chars -= len(self._entries.pop(key)[0])
-            self._entries[key] = value
-            self._chars += size
-            while len(self._entries) > self.max_entries or self._chars > self.max_chars:
+                self._size -= self._size_of(self._entries.pop(key))
+            self._entries[key] = analysis
+            self._size += size
+            while len(self._entries) > self.max_entries or self._size > self.max_detections:
                 _, evicted = self._entries.popitem(last=False)
-                self._chars -= len(evicted[0])
+                self._size -= self._size_of(evicted)
 
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
-            self._chars = 0
+            self._size = 0
 
 
 # --- the service
@@ -194,7 +207,7 @@ class RedactionService:
         entities: list[str] | None = None,
         threshold: float | None = None,
         cache_entries: int = DEFAULT_CACHE_ENTRIES,
-        cache_chars: int = DEFAULT_CACHE_CHARS,
+        cache_detections: int = DEFAULT_CACHE_DETECTIONS,
     ):
         from pii_redact import api  # Presidio/spaCy load here, after the startup checks
 
@@ -203,7 +216,7 @@ class RedactionService:
         self.entities = api._resolve_entities(entities)
         self.threshold = api._resolve_threshold(threshold)
         self.settings_key = json.dumps({"entities": sorted(self.entities), "threshold": self.threshold})
-        self.cache = ResultCache(cache_entries, cache_chars)
+        self.cache = AnalysisCache(cache_entries, cache_detections)
         self.processing_lock = threading.Lock()
         # Plain attributes, read by /health without any lock.
         self.status = "starting"
@@ -214,15 +227,18 @@ class RedactionService:
         return self.status == "ok"
 
     def warm_up(self) -> None:
-        """Loads the store and the NLP model and runs one read-only scan, so
-        the first real request isn't the slow one. Issues no codes."""
+        """Loads the store and the NLP model, builds the index of values the
+        store knows, and runs one read-only scan, so the first real request
+        isn't the slow one. Issues no codes."""
         from pii_redact.anonymize.operators import get_anonymizer_engine
         from pii_redact.detect.analyzer import get_analyzer
+        from pii_redact.detect.known_values import store_index
 
         self.store.load()
         self.store_loaded = True
         get_analyzer()
         get_anonymizer_engine()
+        store_index(self.store)
         self._api.find_pii(_WARM_UP_TEXT, self.store, entities=self.entities, threshold=self.threshold)
         self.status = "ok"
 
@@ -248,28 +264,23 @@ class RedactionService:
         if not self.processing_lock.acquire(timeout=QUEUE_TIMEOUT_S):
             raise ServiceBusy
         try:
-            generation = self.store.refresh()
-            if generation != self.cache.generation:
-                # Another process changed the store: cached results computed
-                # against the old contents are dropped, never reused.
-                self.cache.clear()
-                self.cache.generation = generation
-            keys = [ResultCache.key(self.settings_key, t) for t in texts]
-            results = [self.cache.get(k) for k in keys]
-            misses = [i for i, r in enumerate(results) if r is None]
+            keys = [AnalysisCache.key(self.settings_key, t) for t in texts]
+            analyses = [self.cache.get(k) for k in keys]
+            misses = [i for i, a in enumerate(analyses) if a is None]
             if misses:
-                fresh = self._api.redact_texts(
-                    [texts[i] for i in misses], self.store, entities=self.entities, threshold=self.threshold
+                fresh = self._api.analyze_texts(
+                    [texts[i] for i in misses], entities=self.entities, threshold=self.threshold
                 )
-                for i, result in zip(misses, fresh):
-                    results[i] = (result.text, result.entities)
-                    self.cache.put(keys[i], results[i])
+                for i, analysis in zip(misses, fresh):
+                    analyses[i] = analysis
+                    self.cache.put(keys[i], analysis)
+            results = self._api.redact_analyzed(texts, analyses, self.store, entities=self.entities)
         finally:
             self.processing_lock.release()
         totals: Counter[str] = Counter()
-        for _, counts in results:
-            totals.update(counts)
-        return [text for text, _ in results], dict(totals), len(texts) - len(misses)
+        for result in results:
+            totals.update(result.entities)
+        return [result.text for result in results], dict(totals), len(texts) - len(misses)
 
     def reverse(self, texts: list[str]) -> list[str]:
         return self._api.reverse_texts(texts, self.store)
@@ -499,7 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-body-bytes", type=int, default=DEFAULT_MAX_BODY_BYTES,
                         help=f"Largest accepted request body (default {DEFAULT_MAX_BODY_BYTES})")
     parser.add_argument("--cache-entries", type=int, default=DEFAULT_CACHE_ENTRIES,
-                        help=f"Result cache size in texts, 0 to disable (default {DEFAULT_CACHE_ENTRIES})")
+                        help=f"Detection cache size in texts, 0 to disable (default {DEFAULT_CACHE_ENTRIES})")
     parser.add_argument("--threshold", type=float, default=None, help="Minimum detection score (default 0.5)")
     parser.add_argument("--pid-file", type=Path, default=None, help="Write the process id here while running")
     return parser

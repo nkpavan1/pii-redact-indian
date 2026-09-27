@@ -9,7 +9,7 @@ Scenarios (token counts are estimated at ~4 characters per token):
 - 12K-token prompt as one text, every run new (no cache help)
 - 50K-token prompt as one text, every run new
 - a 20-message history (~12K tokens) where only the last message is new,
-  with the result cache on and with it off
+  with the detection cache on and with it off
 - reverse of a 12K-token reply
 """
 

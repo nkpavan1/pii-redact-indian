@@ -286,9 +286,16 @@ code, not just here:
   - Addresses are masked when they end in a PIN code or sit near the word
     "address".
   - Names after a title (Mr, Shri, Smt, Dr., ...) are caught even in all
-    caps with initials; untitled names depend on spaCy.
+    caps with initials; untitled names depend on spaCy the first time
+    they're seen.
+  - **Anything already known is masked everywhere.** Multi-word names and
+    identifiers the mapping store knows, or that were found elsewhere in
+    the same document or request, are masked wherever they appear, even
+    where detection misses them (`detect/known_values.py`). Single-word
+    names are never swept.
 - **Latency.** NER costs roughly 0.17 s per 1K tokens of new text.
-  `redact-service` caches repeated texts. See HANDOFF.md, section 6.
+  `redact-service` caches the detection of repeated texts. See HANDOFF.md,
+  section 6.
 - **Structured data (CSV/XLSX/JSON) gets its context from field names.**
   Each value is analyzed as `<label>: <value>`, where the label is:
   - for CSV and XLSX, the column header and the label cell to its left;
@@ -305,9 +312,15 @@ code, not just here:
   are masked as `IN_AADHAAR`. That's the safe direction, but noisy.
 - **A short, decontextualized, non-sentence-like string can occasionally
   fool the NER model into tagging it as a person's name** (e.g. a table
-  quarter label). Mitigated with a plausibility filter (a `PERSON` match
-  containing a digit is discarded), not eliminated in general — other
-  odd short strings could in principle still be misclassified.
+  quarter label). Mitigated with a plausibility filter (a `PERSON` match is
+  cut at its first word with a digit, and a lone word left before a number
+  is discarded), not eliminated in general — other odd short strings could
+  in principle still be misclassified.
+- **Name spans are cleaned up with a word list** (`detect/person_spans.py`):
+  greetings, contact verbs, roles and statement words glued to a name are
+  trimmed off, so "Ping Ravi Kumar" and "Ravi Kumar" get one code. A glue
+  word missing from the list still gives that person a second code; adding
+  it is a one-line change.
 - **The postal-address recognizer favors completeness over precision.**
   With no fixed format to match against, it can occasionally flag ordinary
   long prose sitting near an incidental "address" mention as an address

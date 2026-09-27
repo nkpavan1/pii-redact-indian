@@ -16,9 +16,9 @@ from cryptography.fernet import Fernet
 from pii_redact import api, service
 from pii_redact.anonymize.mapping_store import MappingStore
 from pii_redact.service import (
+    AnalysisCache,
     ConfigError,
     RedactionService,
-    ResultCache,
     check_host,
     create_server,
     load_token,
@@ -285,24 +285,24 @@ def test_nothing_from_a_request_is_written_to_disk(tmp_path, ready, monkeypatch)
     assert {p.name for p in new_files if p.is_file()} <= {"mapping_store.enc", "mapping_store.enc.lock"}
 
 
-# --- result cache
+# --- analysis cache
 
 
-def _count_redact_calls(monkeypatch):
+def _count_analyze_calls(monkeypatch):
     calls = []
-    real = api.redact_texts
+    real = api.analyze_texts
 
     def counting(texts, *args, **kwargs):
         calls.append(len(texts))
         return real(texts, *args, **kwargs)
 
-    monkeypatch.setattr(api, "redact_texts", counting)
+    monkeypatch.setattr(api, "analyze_texts", counting)
     return calls
 
 
 def test_repeated_history_is_served_from_the_cache(ready, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="pii_redact.service")
-    calls = _count_redact_calls(monkeypatch)
+    calls = _count_analyze_calls(monkeypatch)
     history = [NOTE, "Asha Rao replied."]
     _, first, _ = _call(ready.port, "POST", "/v1/redact", {"texts": history})
     _, second, _ = _call(ready.port, "POST", "/v1/redact", {"texts": history + ["Thanks, Ravi Kumar."]})
@@ -314,34 +314,66 @@ def test_repeated_history_is_served_from_the_cache(ready, monkeypatch, caplog):
     assert "cache_hits=2" in caplog.text
 
 
-def test_cache_is_dropped_when_another_process_changes_the_store(ready, monkeypatch, store_path, key):
-    calls = _count_redact_calls(monkeypatch)
-    _call(ready.port, "POST", "/v1/redact", {"texts": [NOTE]})
-    MappingStore(store_path, key=key).get_or_create_code("PERSON", "SOMEONE ELSE")  # "Tool 1"
-    _call(ready.port, "POST", "/v1/redact", {"texts": [NOTE]})
+# NER finds no name in this sentence; only the known-value sweep masks it.
+UNSEEN_BY_NER = "Ask Periwinkle Zanzibar about it."
+
+
+def test_a_cached_text_picks_up_a_name_the_store_learned_since(ready, monkeypatch):
+    calls = _count_analyze_calls(monkeypatch)
+    _, before, _ = _call(ready.port, "POST", "/v1/redact", {"texts": [UNSEEN_BY_NER]})
+    assert before["texts"] == [UNSEEN_BY_NER]  # not known yet, and NER misses it
+    _call(ready.port, "POST", "/v1/redact", {"texts": ["Periwinkle Zanzibar called."]})
+    _, after, _ = _call(ready.port, "POST", "/v1/redact", {"texts": [UNSEEN_BY_NER]})
+    # Served from the cache (its detection was not re-run), yet masked: a
+    # cached result must never hide a value the store learned since.
     assert calls == [1, 1]
+    assert after["texts"] == ["Ask PERSON_A about it."]
+
+
+def test_a_cached_text_picks_up_a_name_another_process_stored(ready, monkeypatch, store_path, key):
+    calls = _count_analyze_calls(monkeypatch)
+    _call(ready.port, "POST", "/v1/redact", {"texts": [UNSEEN_BY_NER]})
+    MappingStore(store_path, key=key).get_or_create_code(  # "Tool 1"
+        "PERSON", "PERIWINKLE ZANZIBAR", display="Periwinkle Zanzibar"
+    )
+    _, after, _ = _call(ready.port, "POST", "/v1/redact", {"texts": [UNSEEN_BY_NER]})
+    assert calls == [1]
+    assert after["texts"] == ["Ask PERSON_A about it."]
 
 
 def test_cache_key_covers_settings_as_well_as_text(store):
-    assert ResultCache.key("settings-a", NOTE) != ResultCache.key("settings-b", NOTE)
+    assert AnalysisCache.key("settings-a", NOTE) != AnalysisCache.key("settings-b", NOTE)
     default = RedactionService(store)
     stricter = RedactionService(store, threshold=0.8)
     narrower = RedactionService(store, entities=["IN_PAN"])
     assert len({default.settings_key, stricter.settings_key, narrower.settings_key}) == 3
 
 
-def test_cache_is_bounded_by_entries_and_size():
-    cache = ResultCache(max_entries=2, max_chars=10)
-    cache.put("a", ("aaaa", {}))
-    cache.put("b", ("bbbb", {}))
+def test_cache_holds_offsets_and_types_never_text(ready):
+    _call(ready.port, "POST", "/v1/redact", {"texts": [NOTE + " " + MARKER]})
+    cached = list(ready.service.cache._entries.items())
+    assert cached
+    for key, analysis in cached:
+        assert MARKER not in key and "Ravi" not in key
+        for entity_type, start, end, score in analysis:
+            assert isinstance(entity_type, str) and isinstance(start, int) and isinstance(end, int)
+            assert isinstance(score, float)
+    assert MARKER not in repr(cached) and "Ravi" not in repr(cached)
+
+
+def test_cache_is_bounded_by_entries_and_detections():
+    one, two = (("PERSON", 0, 4, 0.85),), (("PERSON", 0, 4, 0.85), ("IN_PAN", 5, 15, 0.85))
+    cache = AnalysisCache(max_entries=2, max_detections=10)
+    cache.put("a", one)
+    cache.put("b", one)
     cache.get("a")  # "a" is now the most recent
-    cache.put("c", ("cccc", {}))
+    cache.put("c", two)
     assert cache.get("b") is None and cache.get("a") and cache.get("c")
-    cache.put("big", ("x" * 11, {}))  # larger than the whole cache: not stored
+    cache.put("big", one * 10)  # larger than the whole cache: not stored
     assert cache.get("big") is None
-    assert len(ResultCache(0, 100)) == 0
-    disabled = ResultCache(0, 100)
-    disabled.put("a", ("aaaa", {}))
+    assert len(AnalysisCache(0, 100)) == 0
+    disabled = AnalysisCache(0, 100)
+    disabled.put("a", one)
     assert disabled.get("a") is None
 
 

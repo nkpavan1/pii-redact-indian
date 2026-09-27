@@ -196,7 +196,7 @@ Masked when detected, with any context requirement:
 
 | Entity type | Detected when |
 |---|---|
-| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`). |
+| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`), **or** the name is already known (below). Words glued to a name are trimmed (`Ping Ravi Kumar` → `Ping PERSON_A`), and a name spaCy cut short is completed (`LAKSHMI NARAYANAN PAID` → `PERSON_A PAID`), so one person gets one code. |
 | `IN_PAN` | A valid-shape PAN: the 4th character is a holder type (P, C, H, F, A, T, B, L, J, G). `ABCDE1234F` is **not** a valid PAN and is never detected, so don't use it in tests; use e.g. `ABCPE1234F`. |
 | `IN_AADHAAR` | 12 digits with a valid Verhoeff checksum. No context needed. |
 | `EMAIL_ADDRESS`, `IFSC`, `IN_GSTIN`, `IN_VEHICLE_REGISTRATION`, `DRIVING_LICENSE`, `TAN`, `CIN`, `CREDIT_CARD` (Luhn-valid), `AIS_DOWNLOAD_ID`, `DEMAT_DP_ID` (NSDL `IN` + 14 digits) | Format match, no context needed (each checked). |
@@ -208,6 +208,23 @@ Masked when detected, with any context requirement:
 | `IN_ADDRESS` | Text **near the word "address"**, **or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. |
 | `PHONE_NUMBER` | **Indian mobile numbers with no context needed** (chat only): an optional `+91`/`91`/`0`, then 6–9 and 9 more digits, as `9876543210`, `98765 43210`, `98765-43210`, `+91 98765 43210`. All forms of one number get **one code**. Any other phone number (landlines, non-Indian numbers) only near "phone", "mobile", "telephone", "cell" or "number". |
 | `IN_PASSPORT` | One letter + 7 digits (`M1234567`, `M12 34567`) **near "passport"**. |
+
+**Values the store already knows are masked wherever they appear,** even
+where detection misses them:
+- **Which:** names of two or more words, and identifiers of 8+ characters
+  (PAN, Aadhaar, account numbers, e-mail, phone numbers, and every other
+  ID type above). They're matched case-insensitively for names, as whole
+  words or tokens, longest first, and reuse the existing code.
+- **From where:** everything in the shared store (from chat and from
+  published documents), plus whatever the other texts of the **same
+  request** found. So a name found in one message of the history is masked
+  in all of them.
+- **Examples:** once `Periwinkle Zanzibar` is known, `Ask Periwinkle
+  Zanzibar about it.` becomes `Ask PERSON_A about it.`, although NER finds
+  no name there. An account number stored from a statement is masked in
+  chat without the word "account".
+- **Not swept:** single-word names (`Asha`, `Kumar`), addresses, dates of
+  birth.
 
 **Not masked** (checked on synthetic sentences; the model sees these in the
 clear):
@@ -224,17 +241,20 @@ clear):
 - **Money, salaries and amounts**: `12,50,000`.
 - **Medical terms and conditions, age, gender, religion, caste, job
   titles, relations.**
-- **Names NER misses when there's no title.** Examples: names run
-  together in one word, and spaCy mis-spans such as
-  `PRIYA SHARMA W/O RAJESH`, where only "SHARMA W/O" is tagged and PRIYA
-  and RAJESH stay in the clear.
-- **Bare numbers with no context word**, such as an account number without
-  "account".
+- **Names NER misses, the first time they're seen, when there's no
+  title.** spaCy misses some names in ordinary sentences (`Tell Periwinkle
+  Zanzibar to call me`, `Pay Ram Kumar 500 rupees`). Once a name is known
+  (from anywhere, including earlier in the same request), it's masked
+  everywhere; until then it isn't.
+- **Bare numbers with no context word** that the store doesn't know yet,
+  such as an account number without "account".
 
 **False positives, known and accepted (the safe direction):**
 - Product names after "MR" (`MR Plus`).
 - A leading phrase swept into an address (`Send it to 12 MG Road, …`).
 - spaCy tagging some capitalized words as names (`DR NEFT`, `Ms Excel`).
+- A capitalized word right after a name can be taken as part of it
+  (`Ravi Kumar Zanzibar` becomes one `PERSON`): an extra code, not a leak.
 - Any standalone 10-digit number starting 6–9 is treated as a mobile in
   chat. For example, `account 9876543210` is masked as `PHONE_NUMBER`
   rather than `BANK_ACCOUNT_NUMBER`. Amounts with separators, numbers
@@ -258,8 +278,9 @@ token.
 | `/v1/reverse`, 12K-token reply | 1.1 ms | 1.2 ms |
 
 - **Cost scales with new text.** It's roughly 0.16 s per 1K tokens of *new*
-  text. Anything the service has seen before (a repeated system prompt,
-  earlier turns) comes from its cache.
+  text. Detection for anything the service has seen before (a repeated
+  system prompt, earlier turns) comes from its cache; only the cheap
+  known-value sweep and code lookup run again.
 - **Tara's ~64K-token requests** should take about 10–11 s when entirely
   new.
 - **Requests are serialized,** so a request can wait behind one already in
@@ -306,6 +327,9 @@ token.
   `--readable-names` opts into redacted original names.
 - **`redact-publish` detection.** It detects with the document pipeline
   (layout-aware) and uses the string API for the residual gate.
-- **Cache size.** The result cache is also bounded by total size (64M
-  characters), not only by entry count.
+- **What is cached.** The service caches detection results per text
+  (entity types and offsets, never text), bounded by entry count and by
+  total detections (1M). The known-value sweep and the codes run on every
+  request, so a cached text still picks up a name the store learned
+  since.
 - **Long texts** are analyzed in chunks, for linear latency.

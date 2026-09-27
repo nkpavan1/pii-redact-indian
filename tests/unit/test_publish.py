@@ -64,8 +64,8 @@ def _drop_detections_of(monkeypatch, entity_type):
     has to catch what the first pass let through."""
     real = publish.analyze_document
 
-    def missing(path, doc_type):
-        extracted, detections = real(path, doc_type)
+    def missing(path, doc_type, *args):
+        extracted, detections = real(path, doc_type, *args)
         return extracted, [d for d in detections if d.entity_type != entity_type]
 
     monkeypatch.setattr(publish, "analyze_document", missing)

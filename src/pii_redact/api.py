@@ -18,6 +18,9 @@ Guarantees:
   that echoed them) are passed through unchanged, so redacting an already
   redacted text changes nothing. The text around them is still scanned,
   which can only ever add a redaction, never undo one.
+- Values the store already knows are masked even where detection misses
+  them (detect/known_values.py): multi-word names and identifiers, from
+  the store and from the other texts of the same call.
 - Fail closed: an error in detection or in the mapping store raises. No
   code path returns the input unredacted after a failure.
 
@@ -38,6 +41,7 @@ from pii_redact.anonymize.mapping_store import MappingStore
 from pii_redact.anonymize.operators import get_anonymizer_engine, pseudonym_operators
 from pii_redact.config.allowlists import allowlist_for
 from pii_redact.detect.analyzer import SCORE_THRESHOLD, detect_in_block, get_analyzer
+from pii_redact.detect.known_values import find_known, local_index, merge_known, store_index, swept_types
 from pii_redact.reverse.reverse import find_codes, reverse, reverse_many
 from pii_redact.types import Detection, Location, TextBlock
 
@@ -52,6 +56,12 @@ MAX_TEXT_CHARS = 1_000_000
 
 class TextTooLongError(ValueError):
     pass
+
+
+# One text's detections, as (entity_type, start, end, score) tuples: offsets
+# and types only, never the text itself, and independent of the mapping
+# store - which is what makes it safe to cache (see redact-service).
+Analysis = tuple[tuple[str, int, int, float], ...]
 
 
 @dataclass(frozen=True)
@@ -155,6 +165,31 @@ def _detect(text: str, entities: list[str], threshold: float) -> list[Detection]
     )
 
 
+def _detection(entity_type: str, start: int, end: int, score: float) -> Detection:
+    return Detection(entity_type=entity_type, start=start, end=end, score=score, block_index=0, location=Location())
+
+
+def _with_known_values(
+    texts: list[str], found: list[list[Detection]], store: MappingStore, entities: list[str], known_codes: set[str]
+) -> list[list[Detection]]:
+    """Adds the values the store already knows - and the values these texts'
+    own detections found - wherever they appear in any of the texts."""
+    types = swept_types(entities)
+    if not types:
+        return found
+    indexes = [
+        store_index(store),
+        local_index(((d.entity_type, text[d.start : d.end]) for text, ds in zip(texts, found) for d in ds), types),
+    ]
+    result = []
+    for text, detections in zip(texts, found):
+        matches = find_known(text, indexes, types, find_codes(text, known_codes))
+        result.append(
+            merge_known(detections, matches, lambda s, e, t: _detection(t, s, e, 1.0)) if matches else detections
+        )
+    return result
+
+
 def _pseudonymize(
     text: str,
     detections: list[Detection],
@@ -181,6 +216,55 @@ def _pseudonymize(
     )
 
 
+def analyze_texts(
+    texts: Sequence[str],
+    *,
+    threshold: float | None = None,
+    entities: Iterable[str] | None = None,
+) -> list[Analysis]:
+    """The slow half of redact_texts: detection (NER and recognizers), with
+    no store involved. 1:1 with `texts`."""
+    texts = list(texts)
+    _check_texts(texts)
+    resolved_threshold = _resolve_threshold(threshold)
+    resolved_entities = _resolve_entities(entities)
+    return [
+        tuple((d.entity_type, d.start, d.end, d.score) for d in _detect(text, resolved_entities, resolved_threshold))
+        for text in texts
+    ]
+
+
+def redact_analyzed(
+    texts: Sequence[str],
+    analyses: Sequence[Analysis],
+    store: MappingStore,
+    *,
+    entities: Iterable[str] | None = None,
+) -> list[RedactResult]:
+    """The fast half of redact_texts: the known-value sweep and the codes.
+    `analyses` must come from analyze_texts on the same texts, with the
+    same `entities`."""
+    texts = list(texts)
+    _check_texts(texts)
+    if len(analyses) != len(texts):
+        raise ValueError("one analysis per text is required")
+    resolved_entities = _resolve_entities(entities)
+    found = [[_detection(*item) for item in analysis] for analysis in analyses]
+    found = _with_known_values(texts, found, store, resolved_entities, set(store.all_codes()))
+    if not any(found):
+        return [RedactResult(text=text) for text in texts]
+
+    results = []
+    with store.transaction():
+        known_codes = set(store.all_codes())
+        for text, detections in zip(texts, found):
+            result = _pseudonymize(text, detections, store, known_codes)
+            # A code issued for an earlier text counts as known for later ones.
+            known_codes.update(code for *_, code in result.spans)
+            results.append(result)
+    return results
+
+
 def redact_texts(
     texts: Sequence[str],
     store: MappingStore,
@@ -195,26 +279,12 @@ def redact_texts(
     (default: the "chat" allow-list, see config/allowlists.py).
 
     Detection runs first, with no store lock held - it's the slow part.
-    Then every code the call needs is issued inside one store transaction:
-    one lock, and at most one save, however many texts and entities."""
+    Then known values are swept in, and every code the call needs is
+    issued inside one store transaction: one lock, and at most one save,
+    however many texts and entities."""
     texts = list(texts)
-    _check_texts(texts)
-    resolved_threshold = _resolve_threshold(threshold)
-    resolved_entities = _resolve_entities(entities)
-
-    found = [_detect(text, resolved_entities, resolved_threshold) for text in texts]
-    if not any(found):
-        return [RedactResult(text=text) for text in texts]
-
-    results = []
-    with store.transaction():
-        known_codes = set(store.all_codes())
-        for text, detections in zip(texts, found):
-            result = _pseudonymize(text, detections, store, known_codes)
-            # A code issued for an earlier text counts as known for later ones.
-            known_codes.update(code for *_, code in result.spans)
-            results.append(result)
-    return results
+    analyses = analyze_texts(texts, threshold=threshold, entities=entities)
+    return redact_analyzed(texts, analyses, store, entities=entities)
 
 
 def redact_text(
@@ -246,14 +316,18 @@ def find_pii(
     entities: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Detections in `text` that are not codes the store issued - PII still
-    in the clear. Changes nothing, issues no codes. Used as the residual
+    in the clear, including values the store knows (known-value sweep).
+    Changes nothing, issues no codes. Used as the residual
     check on already-redacted output: anything found here should have
     been redacted and wasn't."""
     _check_texts([text])
-    detections = _detect(text, _resolve_entities(entities), _resolve_threshold(threshold))
+    resolved_entities = _resolve_entities(entities)
+    detections = _detect(text, resolved_entities, _resolve_threshold(threshold))
+    known_codes = set(store.all_codes())
+    [detections] = _with_known_values([text], [detections], store, resolved_entities, known_codes)
     if not detections:
         return []
-    detections = _outside_codes(detections, find_codes(text, set(store.all_codes())), text)
+    detections = _outside_codes(detections, find_codes(text, known_codes), text)
     return sorted(
         (Finding(d.entity_type, d.start, d.end, d.score) for d in detections),
         key=lambda f: (f.start, f.end, f.entity_type),

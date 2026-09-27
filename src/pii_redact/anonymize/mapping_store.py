@@ -63,10 +63,11 @@ import os
 import re
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 import keyring
 from cryptography.fernet import Fernet, InvalidToken
@@ -182,6 +183,9 @@ class MappingStoreError(ValueError):
     pass
 
 
+T = TypeVar("T")
+
+
 _EMPTY_STORE = {"entries": [], "counters": {}}
 
 
@@ -198,6 +202,8 @@ class _Snapshot:
     data: dict
     by_key: dict[tuple[str, str], dict]
     by_code: dict[str, dict]
+    # Values computed from the entries (see MappingStore.derived).
+    derived: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def build(cls, raw: bytes, signature: tuple | None, data: dict) -> _Snapshot:
@@ -439,6 +445,12 @@ class MappingStore:
         snapshot.data["entries"].append(entry)
         snapshot.by_key[(entity_type, raw_value)] = entry
         snapshot.by_code[code] = entry
+        for name, value in list(snapshot.derived.items()):
+            add_entry = getattr(value, "add_entry", None)
+            if add_entry is None:
+                del snapshot.derived[name]
+            else:
+                add_entry(entry)
         self._txn_dirty = True
         return code
 
@@ -446,6 +458,22 @@ class MappingStore:
         with self._mutex:
             entry = self._snapshot_for_read().by_code.get(code)
             return _display_of(entry) if entry is not None else None
+
+    def derived(self, name: str, build: Callable[[Sequence[dict]], T]) -> T:
+        """A value computed from the store's entries - a search index, say -
+        built once per version of the store and kept with it, under `name`.
+
+        `build` gets the entries (dicts with entity_type, value, display and
+        code) and must not modify them. When this instance adds an entry, a
+        derived value with an `add_entry(entry)` method is updated in place;
+        any other kind is dropped and rebuilt on next use. When the file
+        changes underneath (another process wrote to it), everything is
+        rebuilt from the new contents."""
+        with self._mutex:
+            snapshot = self._snapshot_for_read()
+            if name not in snapshot.derived:
+                snapshot.derived[name] = build(snapshot.data["entries"])
+            return snapshot.derived[name]
 
     def all_codes(self) -> dict[str, str]:
         """code -> display form, for building the reverse() substitution

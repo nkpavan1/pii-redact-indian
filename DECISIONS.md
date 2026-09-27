@@ -786,3 +786,122 @@ test.
   name, not on the list and tagged PROPN, joins it ("Ravi Kumar Zanzibar
   Traders" stops at "Traders", but an unlisted business word wouldn't).
   The cost is an extra code, not a leak.
+
+## Step 14: sweep for values already known
+
+**The problem** (stack issue 3): NER misses a name it has seen before,
+depending on the sentence. After "Periwinkle Zanzibar" was stored, "Ask
+Periwinkle Zanzibar about it." came back unchanged. "PRIYA SHARMA PAID THE
+BILL." was missed although "Priya Sharma" was stored earlier in the same
+request. Step 13's probing showed more: "Pay Ram Kumar 500 rupees", "Tell
+Periwinkle Zanzibar to call me" and "Meeting with Periwinkle Zanzibar
+tomorrow" get no PERSON at all.
+
+**Decisions** (`detect/known_values.py`)
+- **A deterministic sweep after analysis.** Every text is also searched
+  for values that are already known, and a match reuses the existing code:
+  the matched text normalizes to the stored key, so the store returns the
+  same code.
+- **Known means** the store's entries plus this call's own detections. A
+  name found in one text of a request, or on one line of a document, is
+  masked in all of them, whatever the order. In documents the store is
+  consulted only in pseudonymize mode (`redact-publish`, `redact --mode
+  pseudonymize`); redact mode sweeps the document's own findings only.
+- **Types covered** (only those the caller asked for):
+  - **PERSON, two words or more.** Matched case-insensitively, as whole
+    words, longest first. The text between the words must normalize like
+    the key: spaces are fine, and "R." initials must be written the same
+    way.
+  - **Never swept:** single-word names ("Asha" is a word, "Kumar" is half
+    the country); names under 5 letters; names with a digit or a stop
+    word; names that start or end with a step-13 glue word. The last rule
+    keeps pre-0.4.0 entries like "Ping Ravi Kumar" out of the sweep.
+  - **Identifiers** (`ID_TYPES`: PAN, Aadhaar, account numbers, e-mail,
+    phone, and the other ID types in the allow-lists). Matched as one whole
+    token of 8+ characters containing a digit or "@". Tokens break at
+    whitespace and field separators (`/ : , ( )`), so
+    `UPI/50100123456789/` matches but `TXN50100123456789` doesn't.
+    Indian mobile numbers match in any prefix form. **The main gain is
+    context-scoped types:** an account number stored from a statement is
+    masked in chat without "account" nearby.
+  - **Not covered:** `IN_ADDRESS` (free-form; the PIN-code recognizer
+    already finds repeats) and `IN_DATE_OF_BIRTH` (the same date recurs as
+    a transaction date).
+- **Merging with detections** (`merge_known`):
+  - a match covering NER's shorter span wins ("LAKSHMI NARAYANAN" over
+    "NARAYANAN");
+  - a longer NER span that contains a match keeps its own span ("Ravi
+    Kumar Sharma" doesn't become "PERSON_A Sharma");
+  - partial overlaps of the same type become one span;
+  - an exact span detected under another type takes the known type, so the
+    value keeps its code;
+  - a partial overlap with another type leaves the detection alone.
+- **Never inside codes.** Matches overlapping a code already in the text
+  are dropped, so redacting twice changes nothing (tested).
+- **The residual gate uses it too.** `find_pii` flags a known value left in
+  the clear, so `redact-publish` holds a document where one slipped
+  through.
+- **The store's index.** `MappingStore.derived(name, build)` keeps values
+  computed from the entries with the store snapshot. The index is built
+  once per store version, updated in place when this instance issues a code
+  (`add_entry`), and rebuilt when another process changes the file. The
+  service builds it during warm-up.
+
+**The service cache had to change.** Before, it cached redacted text per
+input text. With the sweep, a text's redaction depends on what the store
+knows: a text cached as "nothing to mask" would keep coming back unmasked
+after the name was learned. That's a leak (tested:
+`test_a_cached_text_picks_up_a_name_the_store_learned_since`).
+- **It now caches detections only.** Per text it holds the entity types
+  and offsets (`api.analyze_texts`, the slow NER half), under the same
+  hashed key. The sweep and the codes (`api.redact_analyzed`) run on every
+  request.
+- **Consequences:** nothing cached ever goes stale, so the "drop the cache
+  when another process writes" rule is gone, and the cache holds no text
+  at all, not even redacted text. It's bounded by entries (2,000) and by
+  total detections (1M).
+- **`redact_texts` is now `analyze_texts` + `redact_analyzed`,** with
+  unchanged behavior; both halves are public.
+
+**Measured** (synthetic store of 18,836 entries: 10K names, 9K account
+numbers):
+- Building the index takes 140 ms, once per store version (at warm-up, or
+  after another process writes).
+- Adding one entry to it takes 0.1 ms.
+- Sweeping a 55K-token text takes 36 ms, against about 8 s for NER on the
+  same text. The sweep is one pass over the words with dictionary lookups,
+  so it doesn't grow with the store.
+
+**Result.** The stack's probe (12 names × 10 frames, one request): 120/120
+fully masked, one code per name. It was 58/60 with two or three codes per
+name.
+
+**Gaps and caveats**
+- **First sightings still depend on NER.** A name NER misses, in a request
+  where nothing else finds it, stays in the clear until it's known.
+- **A stored NER mistake is swept everywhere.** If spaCy once tagged two
+  ordinary words as a PERSON and they got a code, the sweep masks them in
+  every later text. The filters (stop words, glue words, two words
+  minimum) keep most of these out. `redact-key forget` (step 15) removes
+  one.
+- **Different spellings are different values.** "R Rajesh Kumar" vs "R.
+  Rajesh Kumar", or a hyphenated form, don't match each other.
+- **An all-caps known prefix.** With "RAVI KUMAR" known and NER missing
+  "RAVI KUMAR SHARMA" entirely, the sweep masks "RAVI KUMAR" and leaves
+  "SHARMA". The sweep doesn't extend matches: that needs the tagger, and it
+  runs after analysis. It needs NER to miss the longer name and the shorter
+  one to be known.
+
+**Benchmark after this step** (`scripts/bench_service.py`, same machine,
+p50):
+
+| Request | 0.3.0 | now |
+|---|---|---|
+| 12K tokens, all new | 1.88 s | 1.92 s |
+| 50K tokens, all new | 7.96 s | 8.19 s |
+| 20-message history, cache on | 94 ms | 111 ms |
+| same, cache off | 1.61 s | 1.65 s |
+
+The history case pays for the sweep and code lookup now running on all 20
+cached messages (+17 ms). The rest is within 3%, about the run-to-run
+spread seen in step 12.

@@ -310,7 +310,7 @@ def _process_one(
     doc_type = _doc_type_for(relative, cfg.doc_type)
     audit_id = f"publish:{source_id}"
     try:
-        extracted, detections = analyze_document(path, doc_type)
+        extracted, detections = analyze_document(path, doc_type, store)
     except UnsupportedFormatError:
         summary.skipped.append(relative.as_posix())
         print(f"SKIP {relative.as_posix()}: unsupported format")

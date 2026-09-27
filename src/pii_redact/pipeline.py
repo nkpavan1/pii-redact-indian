@@ -19,6 +19,7 @@ from pii_redact.audit.logger import AuditLogger
 from pii_redact.config.allowlists import allowlist_for
 from pii_redact.detect.analyzer import detect_in_block
 from pii_redact.detect.field_context import FIELD_CONTEXT_FORMATS, field_labels
+from pii_redact.detect.known_values import find_known, local_index, merge_known, store_index, swept_types
 from pii_redact.extract.base import Extractor
 from pii_redact.extract.csv_ import CsvExtractor
 from pii_redact.extract.image import ImageExtractor
@@ -35,6 +36,7 @@ from pii_redact.render.markdown import MarkdownRenderer
 from pii_redact.render.pdf import PdfRenderer
 from pii_redact.render.text import TextRenderer
 from pii_redact.render.xlsx import XlsxRenderer
+from pii_redact.reverse.reverse import find_codes
 from pii_redact.review.preview import confirm
 from pii_redact.types import (
     DocFormat,
@@ -398,14 +400,57 @@ def _detect_all(
     return detections
 
 
-def analyze_document(input_path: Path, doc_type: str | None) -> tuple[ExtractedDocument, list[Detection]]:
+def _with_known_values(
+    extracted: ExtractedDocument,
+    detections: list[Detection],
+    doc_type: str | None,
+    mapping_store: MappingStore | None,
+) -> list[Detection]:
+    """Adds known values wherever they appear in the document (see
+    detect/known_values.py): what the document's own detections found - a
+    name detected once is masked on every line - and, given a store, what
+    the store already knows (from other documents and from chat)."""
+    types = swept_types(allowlist_for(doc_type))
+    if not types:
+        return detections
+    blocks = extracted.blocks
+    indexes = [local_index(((d.entity_type, blocks[d.block_index].text[d.start : d.end]) for d in detections), types)]
+    known_codes: set[str] = set()
+    if mapping_store is not None:
+        indexes.append(store_index(mapping_store))
+        known_codes = set(mapping_store.all_codes())
+
+    by_block: dict[int, list[Detection]] = {}
+    for d in detections:
+        by_block.setdefault(d.block_index, []).append(d)
+    result: list[Detection] = []
+    for i, block in enumerate(blocks):
+        block_detections = by_block.get(i, [])
+        matches = find_known(block.text, indexes, types, find_codes(block.text, known_codes))
+        if matches:
+            block_detections = merge_known(
+                block_detections,
+                matches,
+                lambda start, end, entity_type, i=i, block=block: Detection(
+                    entity_type=entity_type, start=start, end=end, score=1.0, block_index=i, location=block.location
+                ),
+            )
+        result.extend(block_detections)
+    return result
+
+
+def analyze_document(
+    input_path: Path, doc_type: str | None, mapping_store: MappingStore | None = None
+) -> tuple[ExtractedDocument, list[Detection]]:
     """Ingest, extract and detect - everything before the review gate.
-    Raises UnsupportedFormatError for a format this tool doesn't handle and
-    lets any other stage error propagate; callers decide how to fail
-    closed."""
+    With a mapping store, values it already knows are found too (read
+    only; nothing is written). Raises UnsupportedFormatError for a format
+    this tool doesn't handle and lets any other stage error propagate;
+    callers decide how to fail closed."""
     doc_format = detect_format(input_path)
     extracted = _EXTRACTORS[doc_format]().extract(input_path)
-    return extracted, _detect_all(extracted, doc_format, doc_type)
+    detections = _detect_all(extracted, doc_format, doc_type)
+    return extracted, _with_known_values(extracted, detections, doc_type, mapping_store)
 
 
 def build_preview(
@@ -472,7 +517,9 @@ def run_pipeline(
     `output_format=MARKDOWN` writes `<name>.md` (see markdown_output_name)
     instead of a file in the input's own format."""
     try:
-        extracted, detections = analyze_document(input_path, doc_type)
+        extracted, detections = analyze_document(
+            input_path, doc_type, mapping_store if mode == Mode.PSEUDONYMIZE else None
+        )
     except UnsupportedFormatError as exc:
         return _not_written(input_path, mode, audit_logger, f"unsupported format: {exc}", failed=False)
     except Exception as exc:
