@@ -959,7 +959,7 @@ spread seen in step 12.
   - It matters beyond test data: with the sweep, a value that should
     never have been stored (an NER mistake) is masked everywhere, and this
     is how to take it out.
-  - Pavan runs it himself; it's never run here. The command for the
+  - The user runs it themselves; it's never run here. The command for the
     stack's codes is in the round-3 report.
 
 **Gaps and caveats**
@@ -1079,3 +1079,48 @@ on the stack's S7 text; they're gone. That text now takes 2.72 s, down from
   the second needs a PIN code or a comma.
 - **The technical-word list is curated,** like the other word lists. A new
   tool name spaCy calls a person needs adding.
+
+## Step 18: version 0.4.0, benchmark, contract note
+
+**Benchmark** (`scripts/bench_service.py`, same machine, all code changes
+in; the 12K p95 overlapped a git command, so it's slightly high):
+
+| Request | 0.3.0, p50 / p95 | 0.4.0, p50 / p95 |
+|---|---|---|
+| 12K tokens, all new | 1.88 / 1.91 s | 1.82 / 1.94 s |
+| 50K tokens, all new | 7.96 / 8.08 s | 7.84 / 8.40 s |
+| 20-message history, cache on | 94 / 96 ms | 109 / 114 ms |
+| same, cache off | 1.61 / 1.62 s | 1.61 / 1.67 s |
+| reverse, 12K tokens | 1.1 / 1.2 ms | 1.1 / 1.3 ms |
+
+- **The PAN fix (step 16) barely shows here.** The benchmark's prompts are
+  full of IDs, so the old pattern's lookahead found a four-digit number
+  quickly. It shows on text without such numbers: the stack's S7 filler
+  went from 4.6 s to 2.7 s.
+- **The span refinement, the sweep and the new address recognizer cost
+  about as much as they save,** apart from the cached-history case (+15
+  ms, the sweep over 20 messages).
+- **The 30 s hook timeout stands** (3.6× the 50K p95).
+
+**Version 0.4.0**, not 0.3.1: new behavior (the known-value sweep, the
+ephemeral store, `redact-key forget`) and a `/health` field.
+
+**What changed in the contract (review round 3):**
+- **`/health` gains `"ephemeral": true|false`** in its ready body
+  (additive). Existing checks of `ready` and `store_loaded` are
+  unaffected.
+- **New flag `--ephemeral-store`** (HANDOFF section 2). It's refused on
+  port 8787.
+- **`version` reads `0.4.0`.**
+- **Endpoints, request and response shapes, auth, error codes, limits and
+  env vars are unchanged.**
+- **The masking table changed** (HANDOFF section 5):
+  - one code per person;
+  - known values swept;
+  - labeled addresses need the noun;
+  - software names are not people.
+- **Response bodies may differ for the same input** as the store learns
+  names (the sweep). That's intended, and still deterministic for a given
+  store state.
+- **Verified black-box once more** at 0.4.0 with the stack's two scripts
+  against an ephemeral service (see the round-3 report).

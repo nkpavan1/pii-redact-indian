@@ -1,7 +1,7 @@
 # HANDOFF: redact-service for the stack session
 
 This is what the stack session (LiteLLM hook, `start-stack.ps1`) needs from
-pii-redact 0.2.0. Background and every design decision are in
+pii-redact 0.4.0. Background and every design decision are in
 [DECISIONS.md](DECISIONS.md), the user-facing changes are in
 [CHANGELOG.md](CHANGELOG.md), and README.md has the rest of the tool.
 
@@ -79,7 +79,7 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
 |---|---|---|
 | not running / not yet bound | connection refused | — |
 | warming up | 503 | `{"status": "starting", "ready": false}` |
-| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.3.0"}` |
+| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.4.0"}` |
 | warm-up failed (exits right after) | 503 | `{"status": "failed", "ready": false}` |
 
 **Readiness wait for `start-stack.ps1`:** poll `/health` every 1 s until
@@ -299,22 +299,35 @@ clear):
 
 Measured with `scripts/bench_service.py`: loopback HTTP, synthetic prompts
 with PII about every 5 sentences, on a desktop AMD Ryzen 5 9600X
-(6 cores / 12 threads), idle machine, version 0.3.0 from the
+(6 cores / 12 threads), idle machine, version 0.4.0 from the
 `H:\ai\engines` venv. Token counts are estimated at 4 characters per
 token.
 
 | Request | p50 | p95 |
 |---|---|---|
-| `/v1/redact`, 12K-token prompt, all new text | 1.88 s | 1.91 s |
-| `/v1/redact`, 50K-token prompt, all new text | 7.96 s | 8.08 s |
-| `/v1/redact`, 20-message history (about 12K tokens), only the last new, cache on | 94 ms | 96 ms |
-| same, cache off | 1.61 s | 1.62 s |
-| `/v1/reverse`, 12K-token reply | 1.1 ms | 1.2 ms |
+| `/v1/redact`, 12K-token prompt, all new text | 1.82 s | 1.94 s |
+| `/v1/redact`, 50K-token prompt, all new text | 7.84 s | 8.40 s |
+| `/v1/redact`, 20-message history (about 12K tokens), only the last new, cache on | 109 ms | 114 ms |
+| same, cache off | 1.61 s | 1.67 s |
+| `/v1/reverse`, 12K-token reply | 1.1 ms | 1.3 ms |
 
 - **Cost scales with new text.** It's roughly 0.16 s per 1K tokens of *new*
   text. Detection for anything the service has seen before (a repeated
   system prompt, earlier turns) comes from its cache; only the cheap
-  known-value sweep and code lookup run again.
+  known-value sweep and code lookup run again. That's why the cached
+  history case went from 94 ms (0.3.0) to 109 ms.
+- **There is no first-request cost.** Warm-up loads the model, the
+  recognizers and the index of known values before `/health` says ready.
+  So the first request after a start costs what any request does.
+- **The cost depends on the text, not just its length.** The stack's
+  12.7K-token S7 filler took 4.6 s on 0.3.0 on every run, first or not,
+  against 1.9 s for the benchmark's 12K prompt.
+  - Most of the difference was a Presidio PAN pattern that scanned ahead
+    to the next four-digit number from every word. That text has none, so
+    each scan ran to its end. It's fixed in 0.4.0: that text now takes
+    2.7 s.
+  - Text dense with numbers or candidate names still costs more per token
+    than prose.
 - **Tara's ~64K-token requests** should take about 10–11 s when entirely
   new.
 - **Requests are serialized,** so a request can wait behind one already in

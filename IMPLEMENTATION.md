@@ -288,6 +288,9 @@ docstring, not silently missing):
   - Mitigated in 0.2.0: `PinCodeAddressRecognizer` catches any address
     ending in a PIN code.
   - A multi-line letterhead address is still masked only on its PIN line.
+  - Changed in 0.4.0: `AddressRecognizer` is label-anchored. It needs the
+    noun used as a label ("Address:", "my address is"), not any form of
+    the word, since the verb garbled instruction text.
 - **Overlapping detections of different entity types at the exact same
   span pick one label somewhat arbitrarily (highest score wins)** — e.g.
   a 14-digit account number matches `PHONE_NUMBER`, `BANK_ACCOUNT_NUMBER`,
@@ -309,11 +312,24 @@ docstring, not silently missing):
   transactions, `create=False`, keyed digests.
 - **`detect/analyzer.py`**: chunked analysis of long texts.
 
+### Review round 3 (0.4.0)
+
+- **`detect/person_spans.py`**: PERSON spans trimmed of glued words,
+  extended over the rest of a name, and cut at an identifier.
+- **`detect/known_values.py`**: the sweep for values already known;
+  `MappingStore.derived` keeps its index.
+- **`detect/recognizers/pan.py`**: Presidio's PAN recognizer without its
+  quadratic pattern.
+- **`detect/recognizers/address.py`**: label-anchored `AddressRecognizer`.
+- **`service.py`**: `--ephemeral-store`, and a detection cache in place
+  of the result cache.
+- **`keytool.py`**: `redact-key forget`.
+
 What was decided, and what is knowingly left open, is logged step by step
 in [DECISIONS.md](DECISIONS.md). The service contract and measured latency
 are in [HANDOFF.md](HANDOFF.md).
 
-Run `pytest` to see what's covered today (527 tests as of 0.3.0, one of
+Run `pytest` to see what's covered today (692 tests as of 0.4.0, one of
 them opt-in: `PII_REDACT_KEYRING_TESTS=1` runs the single test that uses
 the real OS credential store; every other test is blocked from touching
 it).

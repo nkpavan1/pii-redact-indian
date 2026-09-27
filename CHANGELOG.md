@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.4.0 (2026-09-27)
+
+Fixes for the stack session's black-box test of the 0.3.0 service. The
+HTTP contract changes in one additive way: `/health` gains an
+`ephemeral` field. Everything else is what gets masked (HANDOFF.md,
+section 5) and faster requests (section 6).
+
+### Added
+- **Known values are masked wherever they appear,** even where NER misses
+  them. That covers multi-word names and identifiers of 8+ characters
+  that the store already knows, or that the same request or document
+  found elsewhere. Matches reuse the existing code. This applies to chat,
+  documents and `redact-publish`'s residual gate. Single-word names,
+  addresses and dates of birth are not swept.
+- **`redact-service --ephemeral-store`** runs against a throwaway store:
+  a random in-memory key, never in Credential Manager, and a temporary
+  folder deleted at exit. It's for end-to-end tests, and refused on the
+  default port. `/health` reports `"ephemeral": true|false`.
+- **`redact-key forget --code CODE`** removes store entries. It shows each
+  one and asks first. A removed code no longer reverses and is never
+  issued again.
+- `api.analyze_texts` and `api.redact_analyzed`, the two halves of
+  `redact_texts`.
+
+### Changed
+- **One person, one code.** Words glued to a name by NER are trimmed from
+  its edges: "Ping", "Customer", "Dear", "Email", titles, statement words,
+  software names. So "Ping Ravi Kumar" and "Ravi Kumar" share a code.
+- **Names cut short by NER are completed.** "Periwinkle" + "Zanzibar"
+  becomes one name, and so does "LAKSHMI" + "NARAYANAN", so no part of a
+  name is left next to a code.
+- **Labeled addresses need the noun,** used as a label ("Address:", "my
+  address is", "Address of …:", a label line). The verb "address" (e.g.
+  "please address this") and e-mail, IP or web addresses never count. The
+  value stops at the end of the sentence, must have a digit or a comma,
+  and the label itself stays in the clear.
+- **Software names are never people** ("Markdown", "Docker", "Python",
+  …).
+- **The service caches detections, not redacted text,** so a cached text
+  still picks up a name the store learned since.
+- **Faster on some texts.** Presidio's PAN recognizer is replaced by one
+  without its quadratic pattern, which could never produce a result
+  anyway. How much that saves depends on the text: its lookahead scanned
+  ahead to the next four-digit number. On the stack's 12.7K-token filler,
+  with no such number, a request went from 4.6 s to 2.7 s; on the
+  benchmark's prompts, full of IDs, the gain is small (HANDOFF.md,
+  section 6).
+
+### Fixed
+- **A name followed by an identifier leaked.** spaCy reads "Ravi Kumar PAN
+  ABCPE1234F" as one PERSON span, and a PERSON span containing a digit was
+  dropped whole. The span is now cut at the identifier.
+- **Stored names came back in the clear** when NER missed them ("Ask
+  Periwinkle Zanzibar about it.").
+- **Instruction text was garbled** by `IN_ADDRESS` ("Please address this
+  issue today." → `IN_ADDRESS_E.`) and `PERSON` ("Markdown").
+
 ## 0.3.0 (2026-09-25)
 
 The HTTP contract is unchanged. Only what gets masked changes (HANDOFF.md,
