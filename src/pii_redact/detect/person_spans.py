@@ -18,7 +18,8 @@ ordinary sentence frames (DECISIONS.md, step 13):
 So each PERSON span is refined in two steps:
 
 1. Trim: words from NOT_NAME_WORDS (greetings, contact verbs, roles,
-   statement vocabulary, days, months, software names) are removed from
+   statement vocabulary, days, months, software names, headings and
+   labels) are removed from
    either edge, repeatedly, and TITLES from the front only ("Kumari" is a
    title before a name and a surname after one). The lists are curated rather than
    derived from a tagger or a dictionary, on purpose: a word is removed
@@ -111,9 +112,31 @@ _TECHNICAL_WORDS = """
     ollama sdk ide repo readme changelog regex unicode ascii emoji webhook oauth jwt
 """
 
+# Headings and labels in instructions and notes, often in bold ("**Goal:**",
+# "**Pros**", "**Language:** Kannada"). Once spaCy reads them without their
+# emphasis marks (emphasis.py), it tags some as people (0.4.3). Words that
+# are also given names (Grace, Joy, Hope, Frank, Bill) are left out.
+_LABEL_WORDS = """
+    goal goals objective objectives pros cons summary tldr overview context background tone
+    rules boundaries example examples important warning caution reminder todo status priority
+    deadline task tasks answer question sources output input format style persona vibe
+    continuity heartbeat
+    hindi english kannada tamil telugu malayalam marathi bengali bangla gujarati punjabi odia
+    oriya urdu sanskrit konkani assamese hinglish
+"""
+
 NOT_NAME_WORDS = frozenset(
     " ".join(
-        [_GREETINGS, _CONTACT_VERBS, _ROLES, _FUNCTION_WORDS, _TIME_WORDS, _STATEMENT_WORDS, _TECHNICAL_WORDS]
+        [
+            _GREETINGS,
+            _CONTACT_VERBS,
+            _ROLES,
+            _FUNCTION_WORDS,
+            _TIME_WORDS,
+            _STATEMENT_WORDS,
+            _TECHNICAL_WORDS,
+            _LABEL_WORDS,
+        ]
     ).split()
 )
 TITLES = frozenset(_TITLES.split())

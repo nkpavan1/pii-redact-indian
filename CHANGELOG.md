@@ -2,6 +2,22 @@
 
 Releases are tagged `vX.Y.Z` in git, from `v0.2.0` on.
 
+## 0.4.3 (2026-09-27)
+
+The HTTP contract is unchanged.
+
+### Fixed
+- **A single name in markdown emphasis is masked:** `**Ravi** called me`
+  → `**PERSON_A** called me`, `Thanks, *Asha*!`. spaCy missed these, so a
+  reply that bolded a code came back reversed in the next turn's history,
+  and went out in the clear. spaCy now reads the text with its emphasis
+  marks blanked.
+
+### Changed
+- **Headings and labels are never people:** `**Goal:**`, `**Pros**`,
+  `**Language:** Kannada`. A given name used as a heading (`**Grace**`) is
+  masked, as it is in plain text.
+
 ## 0.4.2 (2026-09-27)
 
 The HTTP contract is unchanged.

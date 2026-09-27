@@ -63,6 +63,7 @@ from presidio_analyzer.predefined_recognizers import (
     InVoterRecognizer,
 )
 
+from pii_redact.detect.emphasis import blank_emphasis
 from pii_redact.detect.person_spans import refine_person_results
 from pii_redact.detect.recognizers import AADHAAR_REPLACEMENT_ENTITY, get_custom_recognizers
 from pii_redact.types import Detection, TextBlock
@@ -157,9 +158,13 @@ def _chunk_bounds(text: str) -> list[tuple[int, int]]:
 def _analyze_one(text: str, entities: list[str], language: str, score_threshold: float) -> list[RecognizerResult]:
     """One analyze() call, with PERSON spans refined against the same spaCy
     Doc the analyzer used (see person_spans.py) - computed once here and
-    handed to analyze(), so refining costs no second NLP pass."""
+    handed to analyze(), so refining costs no second NLP pass.
+
+    spaCy reads the text with its markdown emphasis marks blanked
+    (emphasis.py); the copy has the same length, so its offsets hold for
+    `text`, which everything else reads."""
     analyzer = get_analyzer()
-    artifacts = analyzer.nlp_engine.process_text(text, language)
+    artifacts = analyzer.nlp_engine.process_text(blank_emphasis(text), language)
     results = analyzer.analyze(
         text=text, entities=entities, language=language, score_threshold=score_threshold, nlp_artifacts=artifacts
     )

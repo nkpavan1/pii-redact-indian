@@ -327,11 +327,19 @@ docstring, not silently missing):
   of the result cache.
 - **`keytool.py`**: `redact-key forget`.
 
+### Stack retest (0.4.1–0.4.3)
+
+- **`detect/recognizers/address.py`**: the label and lead-in words kept
+  out of PIN-anchored addresses.
+- **`detect/emphasis.py`**: markdown emphasis blanked for the NER pass.
+- **`detect/person_spans.py`**: markdown marks and heading or label words
+  kept out of names.
+
 What was decided, and what is knowingly left open, is logged step by step
 in [DECISIONS.md](DECISIONS.md). The service contract and measured latency
 are in [HANDOFF.md](HANDOFF.md).
 
-Run `pytest` to see what's covered today (713 tests as of 0.4.2, one of
+Run `pytest` to see what's covered today (737 tests as of 0.4.3, one of
 them opt-in: `PII_REDACT_KEYRING_TESTS=1` runs the single test that uses
 the real OS credential store; every other test is blocked from touching
 it).

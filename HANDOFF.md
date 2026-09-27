@@ -1,7 +1,7 @@
 # HANDOFF: redact-service for the stack session
 
 This is what the stack session (LiteLLM hook, `start-stack.ps1`) needs from
-pii-redact 0.4.2. Background and every design decision are in
+pii-redact 0.4.3. Background and every design decision are in
 [DECISIONS.md](DECISIONS.md), the user-facing changes are in
 [CHANGELOG.md](CHANGELOG.md), and README.md has the rest of the tool.
 
@@ -61,8 +61,8 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
   dependency (a change to `pyproject.toml`) needs
   `H:\ai\engines\pii-redact\.venv\Scripts\python.exe -m pip install -e "F:\Github Repos\pii-redact-indian"`.
 - **Releases are tagged** `vX.Y.Z` (annotated tags, from `v0.2.0` on),
-  and `/health` reports the same version. This prints `v0.4.2` exactly
-  when the clone is at that release, or e.g. `v0.4.2-3-g1234abc` when it's
+  and `/health` reports the same version. This prints `v0.4.3` exactly
+  when the clone is at that release, or e.g. `v0.4.3-3-g1234abc` when it's
   three commits past it:
   ```powershell
   git -C "F:\Github Repos\pii-redact-indian" describe --tags
@@ -86,7 +86,7 @@ icacls "H:\ai\redaction\service.token" /inheritance:r /grant:r "${env:USERNAME}:
 |---|---|---|
 | not running / not yet bound | connection refused | — |
 | warming up | 503 | `{"status": "starting", "ready": false}` |
-| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.4.2"}` |
+| ready | 200 | `{"status": "ok", "ready": true, "store_loaded": true, "ephemeral": false, "version": "0.4.3"}` |
 | warm-up failed (exits right after) | 503 | `{"status": "failed", "ready": false}` |
 
 **Readiness wait for `start-stack.ps1`:** poll `/health` every 1 s until
@@ -232,7 +232,7 @@ Masked when detected, with any context requirement:
 
 | Entity type | Detected when |
 |---|---|
-| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`), **or** the name is already known (below). Software names spaCy mistakes for people (`Markdown`, `Docker`, `Python`, …) are never masked. Words glued to a name are trimmed (`Ping Ravi Kumar` → `Ping PERSON_A`), and a name spaCy cut short is completed (`LAKSHMI NARAYANAN PAID` → `PERSON_A PAID`), so one person gets one code. |
+| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`), **or** the name is already known (below). Software names spaCy mistakes for people (`Markdown`, `Docker`, `Python`, …) and heading or label words (`Goal`, `Pros`, `Summary`, language names) are never masked. A name in markdown emphasis (`**Ravi**`, `*Asha*`) counts like one in plain text. Words glued to a name are trimmed (`Ping Ravi Kumar` → `Ping PERSON_A`), and a name spaCy cut short is completed (`LAKSHMI NARAYANAN PAID` → `PERSON_A PAID`), so one person gets one code. |
 | `IN_PAN` | A valid-shape PAN: the 4th character is a holder type (P, C, H, F, A, T, B, L, J, G). `ABCDE1234F` is **not** a valid PAN and is never detected, so don't use it in tests; use e.g. `ABCPE1234F`. |
 | `IN_AADHAAR` | 12 digits with a valid Verhoeff checksum. No context needed. |
 | `EMAIL_ADDRESS`, `IFSC`, `IN_GSTIN`, `IN_VEHICLE_REGISTRATION`, `DRIVING_LICENSE`, `TAN`, `CIN`, `CREDIT_CARD` (Luhn-valid), `AIS_DOWNLOAD_ID`, `DEMAT_DP_ID` (NSDL `IN` + 14 digits) | Format match, no context needed (each checked). |
@@ -284,16 +284,13 @@ clear):
   Zanzibar to call me`, `Pay Ram Kumar 500 rupees`). Once a name is known
   (from anywhere, including earlier in the same request), it's masked
   everywhere; until then it isn't.
-- **A single name in markdown emphasis**: `**Ravi** called me`, `Thanks,
-  *Asha*!`. spaCy misses these, and single-word names aren't swept. Names
-  of two words or more in emphasis are masked. It matters for history: a
-  reply that bolds a first-name code comes back reversed (`**Ravi**`) in
-  the next turn's history, and that copy goes out in the clear.
 - **Bare numbers with no context word** that the store doesn't know yet,
   such as an account number without "account".
 
 **False positives, known and accepted (the safe direction):**
 - Product names after "MR" (`MR Plus`).
+- A given name used as a bold heading or label (`**Grace**`, `**Bill:**
+  ₹500`), masked as a person, as it is in plain text.
 - A phrase before an address that isn't just a label and filler words is
   swept into it (`The email address is on file, 14 Test Lane, …` →
   `The IN_ADDRESS_A`).

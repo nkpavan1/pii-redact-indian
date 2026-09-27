@@ -1131,7 +1131,7 @@ The stack session retested 0.4.0 (`7c9a8fd`) against an ephemeral service
 and everything passed (`H:\ai\setup\reviews\pii-redact-0.3.0-service-test.md`,
 "Retest of 0.4.0"). Two small requests, neither blocking: a labeled address
 masked together with its label, and release tags. Its third observation,
-"for information only", led to step 21. Steps 19–21 below.
+"for information only", led to steps 21 and 22. Steps 19–22 below.
 
 ## Step 19: words leading into a PIN-anchored address
 
@@ -1243,3 +1243,61 @@ the SOUL file isn't masked, though a plain "Tara" is.
     false-positive check on instruction-style text and a benchmark.
 - **Version 0.4.2**, a patch, tagged `v0.4.2`. The contract is unchanged;
   `version` reads `0.4.2`.
+
+## Step 22: names in markdown emphasis, version 0.4.3
+
+The gap left open in step 21, fixed as proposed there, on the user's
+go-ahead.
+
+- **Fix.** spaCy reads a copy of each text with its markdown emphasis
+  marks blanked (`detect/emphasis.py`): runs of `*`, `_` and `~` that open
+  or close emphasis become spaces.
+  - The copy has the same length, so spaCy's offsets hold for the
+    original.
+  - The pattern recognizers, the span refinement and the output all use
+    the original text.
+- **What counts as a mark.** Roughly CommonMark's flanking rules: a run
+  after the start, a space or punctuation and before a non-space
+  (opening), or after a non-space and before the end, a space or
+  punctuation (closing).
+  - Left alone: marks inside a word (`user_name`, `2*3*4`), list bullets
+    (`* item`), a lone mark between spaces, escaped marks (`\*`).
+  - Backticks are never blanked, since a code span usually quotes code.
+    Marks inside a code span are blanked, though.
+- **Measured** on synthetic text, PERSON only, after span refinement:
+  - **Names:** 20 given names × 10 emphasis frames. 14 of 200 found
+    before, 181 now. With the marks deleted instead of blanked, 171. The
+    misses left are mostly frames spaCy misses in plain text too
+    (`*Anil* will send the documents.`).
+  - **False positives:** 179 heading and label words × 10 emphasis
+    frames, 1,790 texts, with words that are also given names included on
+    purpose. Blanking added PERSON hits on 76 texts. 57 of those are
+    PERSON with the marks deleted too, i.e. what spaCy already does in
+    plain text.
+  - **The words behind them** were given names (Hunter, Frank, Bill,
+    Sandy, Claude, Grace, Pat, Mark, Bishop, Rose, Joy, Mason, Dawn), plus
+    three that are never names: Goal, Pros, Kannada.
+- **So, a new word list, `_LABEL_WORDS`,** in NOT_NAME_WORDS: headings and
+  labels (goal, pros, cons, summary, tone, rules, …) and Indian language
+  names. With it, the new hits left (67) are all on given names. Given
+  names stay off the list, as with the other lists: trimming a real name
+  would leak it.
+- **Cost.** None on the benchmark prompts, which have no marks: one scan
+  for a mark character, then nothing. It's 7.5 ms on a 200K-character
+  markdown-heavy text, which takes about 7.8 s to analyze. Not
+  re-benchmarked.
+- **Verified** with the stack's two scripts against an ephemeral service:
+  14/14 and 6/6, with N5's instruction text unchanged.
+- **Version 0.4.3**, a patch, tagged `v0.4.3`. The contract is unchanged;
+  `version` reads `0.4.3`.
+
+**Gaps and caveats**
+- **A given name used as a bold heading or label is masked:** `**Grace**`,
+  `**Bill:** ₹500`, `## **Frank**`. That's the safe direction, and what
+  plain text already did. The stack's bold `**Tara**` in SOUL is now
+  masked like a plain "Tara", so that prompt carries one more code.
+- **Some single names in emphasis are still missed,** where spaCy misses
+  them in plain text too (19 of 200 in the probe).
+- **The known-value sweep still skips single-word names,** so the store
+  knowing a first name doesn't help where NER misses it.
+- **Code spans.** spaCy reads code with its emphasis marks blanked (above).
