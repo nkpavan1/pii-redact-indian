@@ -1,6 +1,6 @@
 [project]
 name = "pii-redact"
-version = "0.4.1"
+version = "0.4.2"
 description = "Local PII redaction and pseudonymization CLI for Indian personal documents"
 requires-python = ">=3.10"
 readme = "README.md"

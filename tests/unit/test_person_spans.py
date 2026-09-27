@@ -48,6 +48,10 @@ def _trimmed(text):
         ("RAVI KUMAR SAVINGS", "RAVI KUMAR"),
         ("Ravi Kumar Monday", "Ravi Kumar"),
         ("S/O RAVI KUMAR", "RAVI KUMAR"),
+        ("Ravi Kumar*", "Ravi Kumar"),
+        ("__Ravi Kumar__", "Ravi Kumar"),
+        ("`Ravi Kumar`", "Ravi Kumar"),
+        ("~~Ravi Kumar~~", "Ravi Kumar"),
     ],
 )
 def test_words_glued_to_a_name_are_trimmed(span, name):
@@ -192,4 +196,15 @@ def test_a_name_cut_short_is_extended_over_the_rest_of_it(store, text, expected,
 def test_a_name_run_on_into_an_identifier_is_still_masked(store, text, expected):
     [result] = redact_texts([text], store)
     assert result.text == expected
+    assert reverse_text("PERSON_A", store) == "Ravi Kumar"
+
+
+def test_markdown_emphasis_stays_outside_the_name(store):
+    # NER's span is "Ravi Kumar*": one asterisk went into the code (0.4.1),
+    # breaking the markdown and giving the name a second code.
+    texts = ["**Ravi Kumar** will call tomorrow.", "Ravi Kumar will call tomorrow."]
+    assert [r.text for r in redact_texts(texts, store)] == [
+        "**PERSON_A** will call tomorrow.",
+        "PERSON_A will call tomorrow.",
+    ]
     assert reverse_text("PERSON_A", store) == "Ravi Kumar"

@@ -2,6 +2,20 @@
 
 Releases are tagged `vX.Y.Z` in git, from `v0.2.0` on.
 
+## 0.4.2 (2026-09-27)
+
+The HTTP contract is unchanged.
+
+### Fixed
+- **A name in markdown emphasis could take an asterisk into its code.**
+  `**Ravi Kumar** will call` became `**PERSON_A* will call`, breaking the
+  markdown and giving the name a second code. Markdown's emphasis and code
+  marks are no longer part of a name.
+
+### Known gap
+- A single name in emphasis (`**Ravi**`, `*Asha*`) is still missed by NER
+  (HANDOFF.md, section 5).
+
 ## 0.4.1 (2026-09-27)
 
 A masking fix from the stack session's retest of 0.4.0. The HTTP contract

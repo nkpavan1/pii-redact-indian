@@ -331,7 +331,7 @@ What was decided, and what is knowingly left open, is logged step by step
 in [DECISIONS.md](DECISIONS.md). The service contract and measured latency
 are in [HANDOFF.md](HANDOFF.md).
 
-Run `pytest` to see what's covered today (708 tests as of 0.4.1, one of
+Run `pytest` to see what's covered today (713 tests as of 0.4.2, one of
 them opt-in: `PII_REDACT_KEYRING_TESTS=1` runs the single test that uses
 the real OS credential store; every other test is blocked from touching
 it).

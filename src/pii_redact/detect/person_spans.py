@@ -127,7 +127,9 @@ _NOT_NAME_ENTITY_TYPES = frozenset(
 )
 
 _MAX_EXTENSION_WORDS = 2
-_EDGE_PUNCTUATION = ".,:;!?\"'()[]{}<>“”‘’"
+# Markdown's emphasis and code marks count too: spaCy reads
+# "**Ravi Kumar** will call" as the PERSON "Ravi Kumar*" (0.4.1).
+_EDGE_PUNCTUATION = ".,:;!?\"'()[]{}<>“”‘’*_`~"
 _WORD = re.compile(r"\S+")
 
 # spaCy's PERSON span swallows a trailing possessive ("Ravi Kumar's" -> one

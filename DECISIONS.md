@@ -1130,7 +1130,8 @@ ephemeral store, `redact-key forget`) and a `/health` field.
 The stack session retested 0.4.0 (`7c9a8fd`) against an ephemeral service
 and everything passed (`H:\ai\setup\reviews\pii-redact-0.3.0-service-test.md`,
 "Retest of 0.4.0"). Two small requests, neither blocking: a labeled address
-masked together with its label, and release tags. Steps 19–20 below.
+masked together with its label, and release tags. Its third observation,
+"for information only", led to step 21. Steps 19–21 below.
 
 ## Step 19: words leading into a PIN-anchored address
 
@@ -1207,3 +1208,38 @@ masked together with its label, and release tags. Steps 19–20 below.
   vars and `/health` fields are the same; `version` reads `0.4.1`. Only
   the masking changes: for an address ending in a PIN code, the label and
   the words leading into it stay in the clear.
+
+## Step 21: markdown emphasis around names, version 0.4.2
+
+Found while checking the stack's third observation: a bold `**Tara**` in
+the SOUL file isn't masked, though a plain "Tara" is.
+
+- **A bug: an asterisk inside the code.** spaCy reads `**Ravi Kumar**
+  will call tomorrow.` as the PERSON `Ravi Kumar*`. The span trimming of
+  step 13 strips punctuation from a name's edges, but not markdown's
+  marks, so the output was `**PERSON_A* will call tomorrow.`
+  - The markdown the model sees is broken.
+  - `Ravi Kumar*` is a different store key from `Ravi Kumar`, so one
+    person got two codes.
+  - Not every layout: `Call **Asha Rao** today.` came out right.
+- **Fix.** `*`, `_`, `` ` `` and `~` count as edge punctuation for PERSON
+  spans. The new tests fail without it.
+- **Not fixed: a single name in emphasis.** spaCy tags none of these:
+  `**Tara** is here.`, `**Ravi** called me yesterday.`, `I spoke to
+  **Asha** about the loan.`, `Thanks, **Meera**!`, `*Suresh* will send
+  the documents.` Six of seven probes were missed (`__Priya__` was found).
+  Names of two words or more in emphasis are found. And since single-word
+  names aren't swept (step 14), a store that knows "Ravi" doesn't help.
+  - **Why it matters beyond the SOUL title.** Models often bold names. A
+    reply with `**PERSON_A**` is reversed to `**Ravi**` for the user. When
+    the client sends the history back on the next turn, that message is
+    redacted again, and the name goes out in the clear.
+  - **A likely fix, not made here.** Run NER on a copy of the text with
+    the emphasis marks blanked (same length, so every offset still holds);
+    all seven probes are then found. But that changes what NER sees in
+    every text, and bold labels are common in system prompts (`**Tone:**`,
+    `**Boundaries**`). A new false positive there would garble
+    instructions again (step 17). It needs its own step, with a
+    false-positive check on instruction-style text and a benchmark.
+- **Version 0.4.2**, a patch, tagged `v0.4.2`. The contract is unchanged;
+  `version` reads `0.4.2`.
