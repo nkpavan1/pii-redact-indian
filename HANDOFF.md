@@ -234,7 +234,7 @@ Masked when detected, with any context requirement:
 | `BANK_ACCOUNT_NUMBER` | 9–18 digits **near "account", "acc" or "bank"** |
 | `EPF_UAN`, `CKYC_NUMBER`, `MF_FOLIO_NUMBER`, `RATION_CARD_NUMBER`, `ITR_ACK_NUMBER`, `DEMAT_DP_ID` (CDSL form) | The number **near its context word** (uan/epf, ckyc/kyc, folio, ration/card, itr/acknowledgement, demat/dp) |
 | `IN_DATE_OF_BIRTH` | A date **near "dob", "birth" or "born"**. Other dates are never masked. |
-| `IN_ADDRESS` | The value **after an address label**: `Address: …`, `my address is …`, `Address of the assessee: …`, a label line with the address on the lines under it, or a label block beside the value in a PDF. It counts only if it has a house number or a comma, and it stops at the end of the sentence. **Or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. The verb ("please address this", "Addressing the user") never counts, and neither do e-mail, IP or web addresses. |
+| `IN_ADDRESS` | The value **after an address label**: `Address: …`, `my address is …`, `Address of the assessee: …`, a label line with the address on the lines under it, or a label block beside the value in a PDF. It counts only if it has a house number or a comma, and it stops at the end of the sentence. **Or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. The label and the words leading into an address stay in the clear (`My address is IN_ADDRESS_A`, `Please send it to IN_ADDRESS_A`). The verb ("please address this", "Addressing the user") never counts, and neither do e-mail, IP or web addresses. |
 | `PHONE_NUMBER` | **Indian mobile numbers with no context needed** (chat only): an optional `+91`/`91`/`0`, then 6–9 and 9 more digits, as `9876543210`, `98765 43210`, `98765-43210`, `+91 98765 43210`. All forms of one number get **one code**. Any other phone number (landlines, non-Indian numbers) only near "phone", "mobile", "telephone", "cell" or "number". |
 | `IN_PASSPORT` | One letter + 7 digits (`M1234567`, `M12 34567`) **near "passport"**. |
 
@@ -282,7 +282,9 @@ clear):
 
 **False positives, known and accepted (the safe direction):**
 - Product names after "MR" (`MR Plus`).
-- A leading phrase swept into an address (`Send it to 12 MG Road, …`).
+- A phrase before an address that isn't just a label and filler words is
+  swept into it (`The email address is on file, 14 Test Lane, …` →
+  `The IN_ADDRESS_A`).
 - spaCy tagging some capitalized words as names (`DR NEFT`, `Ms Excel`).
 - A label followed by something that isn't an address but has a digit or
   a comma: `Address | Part B1 - Information relating to tax…` in an AIS

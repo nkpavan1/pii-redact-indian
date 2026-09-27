@@ -115,6 +115,64 @@ def test_other_numbers_are_not_addresses(text):
 def test_unlabeled_address_is_redacted_end_to_end(store):
     text = "Please courier it to 12 MG Road, Indiranagar, Bengaluru 560038 by Friday."
     res = redact_text(text, store)
-    assert "560038" not in res.text and "Indiranagar" not in res.text
-    assert "IN_ADDRESS_A" in res.text
+    assert res.text == "Please courier it to IN_ADDRESS_A by Friday."
     assert reverse_text(res.text, store) == text
+
+
+# --- words leading into a PIN-anchored address (stack retest of 0.4.0)
+
+_ADDRESS = "14 Test Lane, Sampleville, Bengaluru 560038"
+
+
+@pytest.mark.parametrize(
+    "text, address",
+    [
+        (f"My address is {_ADDRESS}.", _ADDRESS),
+        (f"My address is at {_ADDRESS}.", _ADDRESS),
+        (f"Our office address is {_ADDRESS}.", _ADDRESS),
+        (f"Address - {_ADDRESS}", _ADDRESS),
+        (f"Address {_ADDRESS}", _ADDRESS),
+        (f"Addresses {_ADDRESS}", _ADDRESS),
+        (f"Send it to {_ADDRESS}.", _ADDRESS),
+        (f"I have moved to {_ADDRESS}.", _ADDRESS),
+        ("Address Sampleville - 560038", "Sampleville - 560038"),
+        ("Deliver - 560038", "560038"),
+    ],
+)
+def test_words_leading_into_an_address_are_left_out(text, address):
+    assert _addresses(text) == [address]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Flat 3, Lake View, Pune - 411001",  # a unit
+        "Near City Hospital, MG Road, Bengaluru 560038",  # a landmark
+        "14 Address Lane, Sampleville, Bengaluru 560038",  # "address" inside the address
+        "New Colony, Sector 5, Noida 201301",  # "New" can start a place name
+    ],
+)
+def test_an_address_keeps_its_first_words(text):
+    assert text in _addresses(text)
+
+
+def test_a_lead_in_with_other_words_is_still_swept_in():
+    # The safe direction: masked with the address, not left in the clear.
+    text = f"The email address is on file, {_ADDRESS}"
+    assert _addresses(text) == [f"email address is on file, {_ADDRESS}"]
+
+
+def test_the_label_stays_in_the_clear_and_the_address_keeps_one_code(store):
+    texts = [
+        f"My address is {_ADDRESS}.",
+        f"Please send it to {_ADDRESS}.",
+        f"Address: {_ADDRESS}",
+        f"{_ADDRESS}",
+    ]
+    assert [redact_text(t, store).text for t in texts] == [
+        "My address is IN_ADDRESS_A.",
+        "Please send it to IN_ADDRESS_A.",
+        "Address: IN_ADDRESS_A",
+        "IN_ADDRESS_A",
+    ]
+    assert reverse_text("IN_ADDRESS_A", store) == _ADDRESS

@@ -173,10 +173,21 @@ class AddressRecognizer(LocalRecognizer):
 # or state), which keeps ordinary sentences ending in a 6-digit number
 # ("..., and the fee is 450000") out.
 #
-# Known behavior, accepted (the safe direction): a leading phrase can be
-# swept into the first segment ("Send it to 12 MG Road, ..." takes "Send it
-# to" too - up to six words), and "Word - 123456" matches for capitalized
-# words not on the banking list below.
+# The first segment can start up to six words early, taking the words that
+# lead into the address along ("Please courier it to 12 MG Road, ...", "My
+# address is 14 Test Lane, ..."). Until 0.4.1 they stayed in the match: the
+# label was masked with the value, although AddressRecognizer leaves it in
+# the clear (Presidio merges the two overlapping matches into their union),
+# and one address got a new code for every way it was introduced. Now the
+# lead-in is trimmed from the front of every match: address labels and the
+# words below, one at a time. The trim stops at the first word that isn't
+# one, so a unit ("Flat 3"), a landmark ("Near City Hospital") or a street
+# named "Address Lane" stays part of the address.
+#
+# Known behavior, accepted (the safe direction): a lead-in with other words
+# is still swept in ("The email address is on file, 14 Test Lane, ..."),
+# and "Word - 123456" matches for capitalized words not on the banking list
+# below.
 _PIN = r"(?<!\d)(?<!\d[.,])[1-9]\d{2}[ \t]?\d{3}(?![\d,]?\d)"
 _ADDRESS_WORD = r"[\w#/.'&()\-]+"
 _SEGMENT = rf"{_ADDRESS_WORD}(?:[ \t]+{_ADDRESS_WORD}){{0,5}}[ \t]*,[ \t]*"
@@ -185,6 +196,34 @@ _TRAILING_REGION = r"(?:[ \t]*,[ \t]*[A-Z][A-Za-z]+(?:[ \t]+[A-Z][A-Za-z]+){0,2}
 # Transaction prefixes that are followed by a dash and 6 digits on bank
 # statements, and must not be read as "City - PIN".
 _NOT_PLACES = r"(?i:neft|imps|rtgs|upi|atm|pos|chq|cheque|ref|txn|inv|invoice|order|id|no|emi|otp)"
+# Words that lead into an address and are never part of one. Words that can
+# start an address are left out on purpose: "new", "old", "near", "post",
+# "house", "flat".
+_LEAD_IN_WORDS = frozenset(
+    """
+    i we you he she they it me us him her them my our your his their its this that the a an
+    is was are am were be been has have had will would can could should must
+    to at in on from for of via into and or but so then now also
+    please kindly send sent ship shipped deliver delivered courier couriered mail mailed
+    come visit reach stay stays stayed staying live lives lived living reside resides resided residing
+    located situated moved shifted
+    current present permanent residential postal mailing delivery shipping billing
+    correspondence communication registered office home
+    """.split()
+)
+_LEAD_IN_WORD = regex.compile(r"([A-Za-z]+)(?:[ \t]*-)?[ \t]+")
+_LEAD_IN_LABEL = regex.compile(rf"{_LABEL}(?:[ \t]*-)?[ \t]+")
+
+
+def _after_lead_in(text: str, start: int, end: int) -> int:
+    while True:
+        lead_in = _LEAD_IN_LABEL.match(text, start, end)
+        if not lead_in:
+            word = _LEAD_IN_WORD.match(text, start, end)
+            lead_in = word if word and word.group(1).lower() in _LEAD_IN_WORDS else None
+        if not lead_in:
+            return start
+        start = lead_in.end()
 
 
 class PinCodeAddressRecognizer(PatternRecognizer):
@@ -195,6 +234,7 @@ class PinCodeAddressRecognizer(PatternRecognizer):
     - "BHOPAL - 462001" (a place, a dash, a PIN - one line of a letterhead):
       0.5, masked; banking prefixes (NEFT-..., IMPS-...) excluded.
     - "PIN 560038" / "pincode is 560038": 0.5, the number only.
+    Words leading into the address are trimmed from each match (above).
     The existing AddressRecognizer still handles labeled addresses."""
 
     PATTERNS = [
@@ -224,3 +264,9 @@ class PinCodeAddressRecognizer(PatternRecognizer):
             name="PinCodeAddressRecognizer",
             global_regex_flags=regex.MULTILINE,
         )
+
+    def analyze(self, text, entities, nlp_artifacts=None, regex_flags=None):
+        results = super().analyze(text, entities, nlp_artifacts, regex_flags)
+        for result in results:
+            result.start = _after_lead_in(text, result.start, result.end)
+        return results

@@ -291,6 +291,8 @@ docstring, not silently missing):
   - Changed in 0.4.0: `AddressRecognizer` is label-anchored. It needs the
     noun used as a label ("Address:", "my address is"), not any form of
     the word, since the verb garbled instruction text.
+  - Changed in 0.4.1: `PinCodeAddressRecognizer` trims the label and the
+    words leading into an address from the front of its match.
 - **Overlapping detections of different entity types at the exact same
   span pick one label somewhat arbitrarily (highest score wins)** — e.g.
   a 14-digit account number matches `PHONE_NUMBER`, `BANK_ACCOUNT_NUMBER`,

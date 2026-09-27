@@ -1124,3 +1124,60 @@ ephemeral store, `redact-key forget`) and a `/health` field.
   store state.
 - **Verified black-box once more** at 0.4.0 with the stack's two scripts
   against an ephemeral service (see the round-3 report).
+
+# Stack retest of 0.4.0
+
+The stack session retested 0.4.0 (`7c9a8fd`) against an ephemeral service
+and everything passed (`H:\ai\setup\reviews\pii-redact-0.3.0-service-test.md`,
+"Retest of 0.4.0"). Two small requests, neither blocking: a labeled address
+masked together with its label, and release tags. Steps 19–20 below.
+
+## Step 19: words leading into a PIN-anchored address
+
+- **What the stack saw.** `My address is 14 Test Lane, Sampleville,
+  Bengaluru 560038.` came back as `IN_ADDRESS_B.`, label included, although
+  the 0.4.0 CHANGELOG says a label stays in the clear.
+- **Cause.** Not one recognizer winning over the other. Both matched, and
+  Presidio merges overlapping results of one type into their union.
+  - `AddressRecognizer` (label-anchored) matched the value only.
+  - `PinCodeAddressRecognizer`'s first segment can start up to six words
+    early, so it took "My address is" along.
+  - That was known since step 8 (`Send it to 12 MG Road, …`), and accepted
+    then as the safe direction.
+- **A second effect, found while reproducing.** The swept words become
+  part of the stored value, so one address got a new code for each way it
+  was introduced. `My address is …`, `My address is at …`, `Address - …`
+  and `Our office address is …` gave four different codes, and `Address:
+  …` (value only) a fifth.
+- **Fix.** Each PIN-anchored match is trimmed from the front, one piece at
+  a time, and the trim stops at the first piece that's neither of these:
+  - an address label, with an optional dash (the same `_LABEL` as
+    `AddressRecognizer`'s, so "email address" is never a label);
+  - a word from a fixed list of lead-in words: pronouns and articles,
+    forms of "be", prepositions, "please", verbs of sending and living,
+    address adjectives ("permanent", "postal", "billing", …), "office"
+    and "home".
+- **Why a list, and not "cut before the house number".** Many addresses
+  don't start with a number: `Near City Hospital, …`, `Flat 3, …`, `New
+  Colony, …`. Since the trim stops at the first word not on the list,
+  nothing that can start an address is cut. Such words are kept off the
+  list on purpose: "new", "old", "near", "post", "house", "flat".
+- **Result.**
+  - The stack's case: `My address is IN_ADDRESS_A.`
+  - The introductions above share one code.
+  - `Please courier it to IN_ADDRESS_A by Friday.`
+
+**Gaps and caveats**
+- **A lead-in with a word not on the list is still swept in:** `The email
+  address is on file, 14 Test Lane, …` → `The IN_ADDRESS_C`. That's an
+  extra code, not a leak.
+- **"Office" at the start of a unit is left out:** `Office No. 5, Tech
+  Park, …` → `Office IN_ADDRESS_A`. It's on the list for "our office is
+  at …", and the word reveals nothing.
+- **Old store entries.** Entries made before 0.4.1 with a lead-in in them
+  stay in the store and still reverse. New sightings get the trimmed value,
+  and so a new code. That's the same as the glued-name entries of step 13;
+  `redact-key forget` removes them if wanted.
+- **Not re-benchmarked.** The trim is a short loop per PIN match, and PIN
+  matches are few.
+
