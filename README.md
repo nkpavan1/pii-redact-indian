@@ -291,8 +291,9 @@ code, not just here:
   - Indian mobile numbers are masked without context in chat (the
     service), but documents still need a context word, because statements
     are full of 10-digit references.
-  - Addresses are masked when they end in a PIN code or sit near the word
-    "address".
+  - Addresses are masked when they end in a PIN code or follow an address
+    label ("Address:", "my address is"). The verb ("please address
+    this") never counts.
   - Names after a title (Mr, Shri, Smt, Dr., ...) are caught even in all
     caps with initials; untitled names depend on spaCy the first time
     they're seen.
@@ -329,11 +330,13 @@ code, not just here:
   trimmed off, so "Ping Ravi Kumar" and "Ravi Kumar" get one code. A glue
   word missing from the list still gives that person a second code; adding
   it is a one-line change.
-- **The postal-address recognizer favors completeness over precision.**
-  With no fixed format to match against, it can occasionally flag ordinary
-  long prose sitting near an incidental "address" mention as an address
-  too. Accepted, not hidden — same tradeoff as this project's other
-  free-form-number recognizers (mutual fund folio, ration card).
+- **The labeled-address recognizer favors completeness over precision.**
+  With no fixed format to match against, it masks whatever follows an
+  address label, to the end of the sentence, if it has a digit or a
+  comma. So a label followed by something else ("Address | Part B1 -
+  Information relating to tax…" in an AIS header) is masked too. Accepted,
+  not hidden — same tradeoff as this project's other free-form-number
+  recognizers (mutual fund folio, ration card).
 - **ID-card image redaction only covers OCR'd text.** Faces, photos, and
   QR codes are untouched — an Aadhaar QR code encodes the same data as
   the printed text on the card. Closing this needs either a

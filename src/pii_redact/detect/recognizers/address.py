@@ -16,48 +16,142 @@ H.O,RAMPUR,BHOPAL,462001,MADHYA PRADESH") was not being redacted at
 all, because nothing in Presidio's built-ins or this project's other
 recognizers targets free-text address blocks.
 
-CONTEXT is a single word, verified as its own lemma (see banking.py's
-module docstring for the two ways this goes wrong): "address" self-
-lemmatizes to "address" in context - confirmed directly with spaCy, not
-assumed.
+Two recognizers:
+- AddressRecognizer: a value after an address *label* ("Address:",
+  "my address is", "Address of the assessee:", a label block next to the
+  value in a PDF). Below.
+- PinCodeAddressRecognizer: anything ending in a PIN code, no label needed.
 """
 
 from __future__ import annotations
 
 import regex
-from presidio_analyzer import Pattern, PatternRecognizer
+from presidio_analyzer import LocalRecognizer, Pattern, PatternRecognizer, RecognizerResult
+
+# --- labeled addresses
+#
+# Until 0.4.0 this was a context-scoped pattern: any run of 20+ address-ish
+# characters, masked when any form of "address" was nearby. On instruction
+# text that garbled whole sentences - found in a real system prompt by the
+# stack session: "Please address this issue today." became "IN_ADDRESS_E.",
+# and the heading "## Addressing the user" took the phrase after it along.
+# Presidio's context words match any form of a word (and as substrings), so
+# the verb counted as much as the noun; and the old pattern ran through
+# sentences, since "." and newlines were address characters.
+#
+# Now the value must follow the noun used as a label, and look like an
+# address:
+# - A label is "address" or "addresses" as a word, not in "e-mail address",
+#   "IP address", "web address" and the like, followed by a separator:
+#   ":" or a dash, "is"/"was" ("my address is"), "of ...:" ("Address of the
+#   assessee:"), the " | " between a PDF label block and its value
+#   (pipeline._context_window), or the end of a line the label has to
+#   itself ("Address" as a heading or table label).
+# - The value runs to the end of the line (on to the next line after a
+#   trailing comma), or, after a label on its own line, over the next few
+#   short lines. It stops at a sentence end ("... Indiranagar. Call me").
+# - It must be at least 10 characters and contain a digit or a comma - real
+#   addresses have a house number or a comma, "the same as before" has
+#   neither.
+_NOT_POSTAL = (
+    r"(?i:e-?mail|mail|ip|mac|web|website|url|wallet|memory|server|ethernet|network|bitcoin|crypto|contract|"
+    r"hardware|broadcast|gateway|host|return)"
+)
+_LABEL = rf"(?<![\w@.\-])(?<!{_NOT_POSTAL}[ \t_\-]?)(?i:address(?:es)?)(?![\w@\-])"
+_INLINE_SEPARATOR = (
+    r"(?:"
+    r"[ \t]*[:–—][ \t]*"                     # "Address: ...", "Address – ..."
+    r"|[ \t]+-[ \t]*|[ \t]*-[ \t]+"          # "Address - ...", but not "address-book"
+    r"|[ \t]*\|[ \t]*"                        # a PDF label block next to its value ("Address | ...")
+    r"|[ \t]+(?i:is|was)[ \t]+(?:(?i:at)[ \t]+)?"                                     # "my address is ..."
+    r"|[ \t]+(?i:of)[ \t]+[^\n:|]{1,40}?(?:[ \t]*[:–—|][ \t]*|[ \t]+(?i:is|was)[ \t]+)"  # "Address of X: ..."
+    r")"
+)
+_INLINE_LABEL = regex.compile(_LABEL + _INLINE_SEPARATOR)
+# A label with its line to itself: "Address", "Address:", "## Address",
+# "Permanent Address", then the value on the following lines.
+_LINE_LABEL = regex.compile(
+    rf"(?m)^[ \t#*>\-]*(?:[A-Za-z]+[ \t]+){{0,2}}{_LABEL}[ \t]*:?[ \t]*\r?\n"
+)
+_VALUE_CHAR = r"[\w \t,./\-#()'&]"
+_INLINE_VALUE = regex.compile(rf"[\w#]{_VALUE_CHAR}*(?:(?<=,[ \t]*)\r?\n[ \t]*[\w#]{_VALUE_CHAR}*)*")
+_VALUE_LINE = regex.compile(rf"[ \t>*\-]*([\w#]{_VALUE_CHAR}{{0,79}})[ \t]*(?:\r?\n|$)")
+# A period ends the value when a sentence starts after it ("... near the
+# lake. Call me") - unless it ends an abbreviation: a word of up to three
+# letters ("No. 12", "St. Mary's Road", "Opp. Bus Stand") or a longer one
+# from the list ("Dist. Bhopal").
+_ABBREVIATIONS = r"(?i:dist|bldg|blvd|sect|apts|extn|taluk|tehsil)"
+_SENTENCE_END = regex.compile(rf"(?<=\b[A-Za-z]{{4,}})(?<!\b{_ABBREVIATIONS})\.(?=[ \t]+[A-Z][a-z])")
+_MAX_VALUE_LINES = 5
+_MIN_VALUE_CHARS = 10
+_TRAILING = " \t,./-(&'"
 
 
-class AddressRecognizer(PatternRecognizer):
-    """Detects: a run of 20+ typical address characters (letters, digits,
-    spaces, commas, periods, hyphens, slashes), filtered by nearby
-    "address" context. FP/FN risk: HIGH without context, by design - any
-    sufficiently long ordinary sentence could match the bare pattern; the
-    low base score plus required context is what keeps this from firing
-    on unrelated body text (confirmed directly: a document section header
-    of similar length and character makeup does NOT cross the score
-    threshold without "address" nearby). No checksum exists for free text.
-    Deliberately does NOT try to parse or validate address structure (no
-    fixed format exists across Indian states) - it redacts the whole
-    matched span, favoring completeness over precision once context
-    confirms this is actually an address field."""
+def _looks_like_an_address(value: str) -> bool:
+    return len(value) >= _MIN_VALUE_CHARS and any(c.isdigit() or c == "," for c in value)
 
-    PATTERNS = [
-        Pattern(
-            "Address block (context required)",
-            r"\b[\w][\w\s,./\-]{19,}\b",
-            0.15,
-        )
-    ]
-    CONTEXT = ["address"]
+
+def _trimmed(text: str, start: int, end: int) -> tuple[int, int] | None:
+    stop = _SENTENCE_END.search(text, start, end)
+    if stop:
+        end = stop.start()
+    while end > start and text[end - 1] in _TRAILING:
+        end -= 1
+    return (start, end) if _looks_like_an_address(text[start:end]) else None
+
+
+def _inline_value(text: str, pos: int) -> tuple[int, int] | None:
+    match = _INLINE_VALUE.match(text, pos)
+    return _trimmed(text, pos, match.end()) if match else None
+
+
+def _value_lines(text: str, pos: int) -> tuple[int, int] | None:
+    start = end = None
+    for _ in range(_MAX_VALUE_LINES):
+        match = _VALUE_LINE.match(text, pos)
+        if not match:
+            break
+        if start is None:
+            start = match.start(1)
+        end = match.end(1)
+        pos = match.end()
+    return _trimmed(text, start, end) if start is not None else None
+
+
+class AddressRecognizer(LocalRecognizer):
+    """IN_ADDRESS: the value after an address label (see above). Score 0.6,
+    no context step - the label is the context."""
+
+    SCORE = 0.6
 
     def __init__(self):
-        super().__init__(
-            supported_entity="IN_ADDRESS",
-            patterns=self.PATTERNS,
-            context=self.CONTEXT,
-            name="AddressRecognizer",
-        )
+        super().__init__(supported_entities=["IN_ADDRESS"], name="AddressRecognizer", supported_language="en")
+
+    def load(self) -> None:
+        pass
+
+    def analyze(self, text: str, entities: list[str], nlp_artifacts=None) -> list[RecognizerResult]:
+        spans = set()
+        for label in _INLINE_LABEL.finditer(text):
+            starts = [label.end()]
+            if "|" in label.group():
+                # A PDF label can sit two blocks before its value, with an
+                # unrelated neighbor block in between.
+                next_pipe = text.find("|", label.end(), label.end() + 80)
+                if next_pipe != -1:
+                    after = next_pipe + 1
+                    while after < len(text) and text[after] in " \t":
+                        after += 1
+                    starts.append(after)
+            for start in starts:
+                span = _inline_value(text, start)
+                if span:
+                    spans.add(span)
+        for label in _LINE_LABEL.finditer(text):
+            span = _value_lines(text, label.end())
+            if span:
+                spans.add(span)
+        return [RecognizerResult("IN_ADDRESS", start, end, self.SCORE) for start, end in sorted(spans)]
 
 
 # --- PIN-code-anchored addresses (no "address" label needed)

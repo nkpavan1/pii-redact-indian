@@ -105,14 +105,14 @@ def test_in_pan_does_not_match_inside_ais_download_id():
     assert not any(re.search(p.regex, test_id) for p in pan_recognizer.patterns)
 
 
-def test_address_pattern_matches_real_indian_address():
-    pattern = re.compile(AddressRecognizer.PATTERNS[0].regex)
+def _labeled_addresses(text):
+    return [text[r.start : r.end] for r in AddressRecognizer().analyze(text, ["IN_ADDRESS"])]
+
+
+def test_address_after_a_label_matches_a_real_indian_address():
     address = "B-204, SUNRISE APARTMENTS,MAIN ROAD,RAMPUR H.O,RAMPUR,BHOPAL,462001,MADHYA PRADESH"
-    match = pattern.search(address)
-    assert match is not None
-    assert match.group(0) == address
+    assert _labeled_addresses(f"Address: {address}") == [address]
 
 
-def test_address_pattern_requires_minimum_length():
-    pattern = re.compile(AddressRecognizer.PATTERNS[0].regex)
-    assert not pattern.search("short")
+def test_address_value_has_a_minimum_length():
+    assert _labeled_addresses("Address: 12, A Rd") == []

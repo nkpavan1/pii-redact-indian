@@ -225,7 +225,7 @@ Masked when detected, with any context requirement:
 
 | Entity type | Detected when |
 |---|---|
-| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`), **or** the name is already known (below). Words glued to a name are trimmed (`Ping Ravi Kumar` → `Ping PERSON_A`), and a name spaCy cut short is completed (`LAKSHMI NARAYANAN PAID` → `PERSON_A PAID`), so one person gets one code. |
+| `PERSON` | spaCy finds a name (mixed case, all caps, even lowercase in the probes), **or** a name follows a title: Mr, Mrs, Miss, Shri, Sri, Smt, Kumari, "Dr." or "Ms." (with the period), including all-caps names with initials (`MR. R RAJESH KUMAR` → `MR. PERSON_A`), **or** the name is already known (below). Software names spaCy mistakes for people (`Markdown`, `Docker`, `Python`, …) are never masked. Words glued to a name are trimmed (`Ping Ravi Kumar` → `Ping PERSON_A`), and a name spaCy cut short is completed (`LAKSHMI NARAYANAN PAID` → `PERSON_A PAID`), so one person gets one code. |
 | `IN_PAN` | A valid-shape PAN: the 4th character is a holder type (P, C, H, F, A, T, B, L, J, G). `ABCDE1234F` is **not** a valid PAN and is never detected, so don't use it in tests; use e.g. `ABCPE1234F`. |
 | `IN_AADHAAR` | 12 digits with a valid Verhoeff checksum. No context needed. |
 | `EMAIL_ADDRESS`, `IFSC`, `IN_GSTIN`, `IN_VEHICLE_REGISTRATION`, `DRIVING_LICENSE`, `TAN`, `CIN`, `CREDIT_CARD` (Luhn-valid), `AIS_DOWNLOAD_ID`, `DEMAT_DP_ID` (NSDL `IN` + 14 digits) | Format match, no context needed (each checked). |
@@ -234,7 +234,7 @@ Masked when detected, with any context requirement:
 | `BANK_ACCOUNT_NUMBER` | 9–18 digits **near "account", "acc" or "bank"** |
 | `EPF_UAN`, `CKYC_NUMBER`, `MF_FOLIO_NUMBER`, `RATION_CARD_NUMBER`, `ITR_ACK_NUMBER`, `DEMAT_DP_ID` (CDSL form) | The number **near its context word** (uan/epf, ckyc/kyc, folio, ration/card, itr/acknowledgement, demat/dp) |
 | `IN_DATE_OF_BIRTH` | A date **near "dob", "birth" or "born"**. Other dates are never masked. |
-| `IN_ADDRESS` | Text **near the word "address"**, **or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. |
+| `IN_ADDRESS` | The value **after an address label**: `Address: …`, `my address is …`, `Address of the assessee: …`, a label line with the address on the lines under it, or a label block beside the value in a PDF. It counts only if it has a house number or a comma, and it stops at the end of the sentence. **Or** anything ending in a 6-digit PIN code: `12 MG Road, Indiranagar, Bengaluru 560038`, `BHOPAL - 462001`, or just the number after `PIN`/`pincode`. The verb ("please address this", "Addressing the user") never counts, and neither do e-mail, IP or web addresses. |
 | `PHONE_NUMBER` | **Indian mobile numbers with no context needed** (chat only): an optional `+91`/`91`/`0`, then 6–9 and 9 more digits, as `9876543210`, `98765 43210`, `98765-43210`, `+91 98765 43210`. All forms of one number get **one code**. Any other phone number (landlines, non-Indian numbers) only near "phone", "mobile", "telephone", "cell" or "number". |
 | `IN_PASSPORT` | One letter + 7 digits (`M1234567`, `M12 34567`) **near "passport"**. |
 
@@ -261,9 +261,11 @@ clear):
   `080-23456789`, `+1 555 010 0199`, and `call +44 20 7946 0958` ("call"
   doesn't lift Presidio's phone recognizer).
 - **UPI IDs, voter IDs and passport numbers without their context word.**
-- **Addresses with neither a PIN code nor the word "address"**, e.g.
-  `12 MG Road, Indiranagar` (no PIN). Multi-line addresses (letterheads)
-  are masked only on the line that carries the PIN code.
+- **Addresses with neither a PIN code nor an address label**, e.g.
+  `12 MG Road, Indiranagar` (no PIN, no label). Unlabeled multi-line
+  addresses (letterheads) are masked only on the line that carries the
+  PIN code. A labeled value with neither a digit nor a comma ("my address
+  is Lotus Towers") isn't masked either.
 - **Place names, organizations and employers**: `Pune`, `Infosys`.
 - **Plain dates and times**, apart from a date of birth with its context
   word.
@@ -282,6 +284,9 @@ clear):
 - Product names after "MR" (`MR Plus`).
 - A leading phrase swept into an address (`Send it to 12 MG Road, …`).
 - spaCy tagging some capitalized words as names (`DR NEFT`, `Ms Excel`).
+- A label followed by something that isn't an address but has a digit or
+  a comma: `Address | Part B1 - Information relating to tax…` in an AIS
+  header.
 - A capitalized word right after a name can be taken as part of it
   (`Ravi Kumar Zanzibar` becomes one `PERSON`): an extra code, not a leak.
 - Any standalone 10-digit number starting 6–9 is treated as a mobile in

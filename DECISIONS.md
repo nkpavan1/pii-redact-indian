@@ -1012,3 +1012,70 @@ replacements, so exactly one `IN_PAN` recognizer is registered (tested).
 **Measured:** the S7 text went from 4.6 s to 2.9 s, and a 52K-character
 prose text from 3.55 s to 2.28 s. The benchmark is re-run in step 18,
 after all code changes.
+
+## Step 17: false positives on instruction text (stack issue 5)
+
+**The problem.** Found by the stack session in a real assistant system
+prompt on a cloud route, so it hit every cloud turn:
+- "Please address this issue today." → `IN_ADDRESS_E.`
+- "Address envelopes neatly." → `IN_ADDRESS_D.`
+- The heading "## Addressing the user" took the following phrase with it.
+- "Markdown does NOT render." → `PERSON_R does NOT render.`
+- Probing found more of the same: "run Docker" → `run PERSON_B`.
+
+**Cause.** The labeled-address recognizer was a context-scoped pattern: any
+run of 20+ address-ish characters (`\b[\w][\w\s,./\-]{19,}\b`, score
+0.15), lifted over the threshold when "address" was nearby.
+- Presidio's context matching compares lemmas as substrings, so the verb,
+  "addressing" and "addressed" counted as much as the noun.
+- `.` and newlines were address characters, so a match ran through
+  sentences and lines.
+
+**Decisions**
+- **`AddressRecognizer` is now label-anchored** (a `LocalRecognizer` with
+  its own `analyze`, no context words).
+  - **The label** is "address" or "addresses" as a whole word, but not
+    after e-mail, IP, web, wallet, server, network, return and the like.
+  - **It must be followed by a separator:**
+    - `:`, or a dash with spaces (never `address-book`);
+    - "is"/"was" (`my address is …`);
+    - "of … :" (`Address of the assessee: …`);
+    - the ` | ` between a PDF label block and its value, including one
+      unrelated block in between (a `left | above | value` window);
+    - or a line the label has to itself (`Permanent Address`, `## Address:`),
+      with the value on the lines below it.
+  - **The value** runs to the end of the line, or on to the next line
+    after a trailing comma. Under a label line it takes up to 5 lines, until
+    a blank line.
+  - **It stops at a sentence end:** a period after a word of 4+ letters,
+    followed by a capitalized word. Abbreviations don't count ("No.",
+    "St.", "Opp.", "Dist.", "Bldg.", …).
+  - **It must look like an address:** 10+ characters, with a digit or a
+    comma. "My address is the same as before." is not masked.
+  - **The label is no longer masked** with the value: `My address is
+    IN_ADDRESS_A. Call me later.` Before, the whole sentence went.
+- **Software names are never names.** A list of them (Markdown, Docker,
+  Python, JSON, YAML, GitHub, Kubernetes, VS Code's "vscode", ...) joins
+  step 13's `NOT_NAME_WORDS`. A PERSON span made only of them is dropped,
+  and they never join a name.
+  - As with the rest of that list, words that are also given names are left
+    out: Ruby, Julia, Crystal, Claude.
+- **Owner's name still masked.** A regression test runs a synthetic
+  system prompt through: the instructions come back untouched, and the
+  owner's name is masked twice with one code. Every existing address test
+  still passes, including the PDF context-window test and the AIS header
+  false positive that stays documented as accepted.
+
+**Measured.** The old pattern produced 154 low-score candidates per window
+on the stack's S7 text; they're gone. That text now takes 2.72 s, down from
+2.87 s after step 16 and 4.6 s before it.
+
+**Gaps and caveats**
+- **Unlabeled addresses** still need a PIN code, as before.
+- **A labeled value that isn't an address but has a digit or a comma** is
+  masked (the AIS header case), and so is the rest of its line.
+- **Multi-line addresses after an inline label** continue only across a
+  trailing comma. `Address: Flat 5\nSector 12` masks the first line only;
+  the second needs a PIN code or a comma.
+- **The technical-word list is curated,** like the other word lists. A new
+  tool name spaCy calls a person needs adding.

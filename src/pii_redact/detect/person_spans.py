@@ -18,9 +18,9 @@ ordinary sentence frames (DECISIONS.md, step 13):
 So each PERSON span is refined in two steps:
 
 1. Trim: words from NOT_NAME_WORDS (greetings, contact verbs, roles,
-   statement vocabulary, days, months) are removed from either edge,
-   repeatedly, and TITLES from the front only ("Kumari" is a title before
-   a name and a surname after one). The lists are curated rather than
+   statement vocabulary, days, months, software names) are removed from
+   either edge, repeatedly, and TITLES from the front only ("Kumari" is a
+   title before a name and a surname after one). The lists are curated rather than
    derived from a tagger or a dictionary, on purpose: a word is removed
    only when it is never a name. Words that are also given names ("Ram",
    "Bill", "Will", "Mark", "Rose", "Sunny", and the months "Jan", "Mar",
@@ -97,8 +97,24 @@ _STATEMENT_WORDS = """
     jewellers textiles foods hotel restaurant
 """
 
+# Software and format names spaCy tags as people in instruction text
+# ("Markdown does NOT render", "run Docker"), found in a real system prompt.
+# Only words that are never given names: Ruby, Julia, Crystal, Claude and
+# the like are left out.
+_TECHNICAL_WORDS = """
+    markdown python javascript typescript json yaml toml html css xml csv pdf sql bash zsh shell
+    powershell linux ubuntu debian fedora windows macos android ios github gitlab bitbucket git
+    docker kubernetes podman terraform ansible nginx redis postgres postgresql mysql sqlite
+    mongodb node nodejs npm pip conda jupyter vscode vim neovim emacs tmux wsl chrome chromium
+    firefox safari gmail outlook slack discord telegram whatsapp zoom notion obsidian excel
+    powerpoint onedrive dropbox api cli gui url http https ssh llm gpt chatgpt openai litellm
+    ollama sdk ide repo readme changelog regex unicode ascii emoji webhook oauth jwt
+"""
+
 NOT_NAME_WORDS = frozenset(
-    " ".join([_GREETINGS, _CONTACT_VERBS, _ROLES, _FUNCTION_WORDS, _TIME_WORDS, _STATEMENT_WORDS]).split()
+    " ".join(
+        [_GREETINGS, _CONTACT_VERBS, _ROLES, _FUNCTION_WORDS, _TIME_WORDS, _STATEMENT_WORDS, _TECHNICAL_WORDS]
+    ).split()
 )
 TITLES = frozenset(_TITLES.split())
 
