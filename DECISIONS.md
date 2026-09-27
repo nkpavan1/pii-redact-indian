@@ -966,3 +966,49 @@ spread seen in step 12.
 - **`forget` can't list the store.** To find a code you need the text it
   appeared in, or `/v1/reverse`. That's deliberate: a listing command
   would print every stored value.
+
+## Step 16: the "first request" timing, and Presidio's quadratic PAN pattern
+
+**No first-request cost.** The stack's 4.17 s was the cost of that text,
+on every run. In-process, after warm-up, the S7 text (the "Line {i}: the
+shipment of widgets number {i} …" filler, 50,908 characters) took
+4.63 s the first time, 4.60 s the second, 4.58 s the third, and 4.54 s for
+a variant. Against a real ephemeral service it took 4.61 s. The service's
+warm-up already loads the model, the recognizers and (step 14) the sweep
+index, so the first request does nothing extra. The text is simply about
+2.4× more expensive per character than the benchmark's prompts.
+
+**Why it's expensive, profiled:**
+- **Presidio's "PAN (Low)" pattern** took 287 ms per 11K-character window,
+  on every text:
+
+  ```
+  \b((?=.*?[a-zA-Z])(?=.*?[0-9]{4})[\w@#$%^?~-]{10})\b
+  ```
+
+  - The lookaheads use `.*?` under Presidio's DOTALL, so from every word
+    boundary they may scan to the end of the text: quadratic.
+  - It can **never produce a result**: score 0.01, at most 0.4 with a
+    context word, below the 0.5 threshold. Nor can "PAN (Medium)" (0.1,
+    so 0.45), but that pattern is cheap.
+- **Low-score address candidates.** The context-scoped address recognizer
+  gave 154 candidates per window on this text, and Presidio's context
+  step is quadratic in candidates × tokens: about 1.1 s. That recognizer
+  is issue 5 (step 17).
+
+**Decision: `PanRecognizer` replaces `InPanRecognizer`**
+(`detect/recognizers/pan.py`), like the Aadhaar and passport
+replacements, so exactly one `IN_PAN` recognizer is registered (tested).
+- Same patterns, scores and context words, except the Low pattern's
+  lookaheads are bounded to the 10-character token, which is what they
+  were meant to check. That takes 0.8 ms on the same window.
+- Within a token it matches exactly what Presidio's matches (tested on a
+  set of tokens). Presidio's also matched a token that merely had four
+  digits somewhere later in the text, which only ever affected a score-0.01
+  result.
+- Detection is unchanged: the full suite passes, and PAN positives and
+  negatives are pinned in `test_pan_recognizer.py`.
+
+**Measured:** the S7 text went from 4.6 s to 2.9 s, and a 52K-character
+prose text from 3.55 s to 2.28 s. The benchmark is re-run in step 18,
+after all code changes.

@@ -51,8 +51,7 @@ def test_india_builtin_recognizers_are_actually_active(analyzer):
     # alone does NOT activate them; _build_registry() must add them
     # explicitly (see detect/analyzer.py's module docstring).
     names = {type(r).__name__ for r in analyzer.registry.recognizers}
-    for expected in ("InPanRecognizer", "InVoterRecognizer",
-                      "InVehicleRegistrationRecognizer", "InGstinRecognizer"):
+    for expected in ("InVoterRecognizer", "InVehicleRegistrationRecognizer", "InGstinRecognizer"):
         assert expected in names, f"{expected} missing from the built registry"
     # The built-in Aadhaar and passport recognizers must be replaced, not
     # stacked (the passport one could never reach the threshold).
@@ -60,6 +59,11 @@ def test_india_builtin_recognizers_are_actually_active(analyzer):
     assert "AadhaarChecksumRecognizer" in names
     assert "InPassportRecognizer" not in names
     assert "PassportNumberRecognizer" in names
+    # PAN: Presidio's has a quadratic pattern (recognizers/pan.py).
+    assert "InPanRecognizer" not in names
+    assert "PanRecognizer" in names
+    pan_recognizers = [r for r in analyzer.registry.recognizers if "IN_PAN" in r.supported_entities]
+    assert [type(r).__name__ for r in pan_recognizers] == ["PanRecognizer"]
 
 
 def test_realistic_pan_is_detected_above_threshold(analyzer):

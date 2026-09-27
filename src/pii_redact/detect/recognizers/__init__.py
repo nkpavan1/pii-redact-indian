@@ -48,6 +48,7 @@ from pii_redact.detect.recognizers.other_documents import (
     PassportNumberRecognizer,
     RationCardNumberRecognizer,
 )
+from pii_redact.detect.recognizers.pan import PanRecognizer
 from pii_redact.detect.recognizers.phone import IndianMobileRecognizer
 from pii_redact.detect.recognizers.salutation_names import SalutationNameRecognizer
 
@@ -76,4 +77,5 @@ def get_custom_recognizers() -> list[PatternRecognizer]:
         RationCardNumberRecognizer(),
         PassportNumberRecognizer(),
         IndianMobileRecognizer(),
+        PanRecognizer(),
     ]

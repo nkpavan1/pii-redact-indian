@@ -59,7 +59,6 @@ from functools import lru_cache
 from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.predefined_recognizers import (
     InGstinRecognizer,
-    InPanRecognizer,
     InVehicleRegistrationRecognizer,
     InVoterRecognizer,
 )
@@ -87,12 +86,12 @@ _CHUNK_BREAKS = ("\n\n", "\n", ". ", " ")
 
 # Presidio's India-specific built-ins that ship disabled (see module
 # docstring) - activated explicitly here, the same way a custom recognizer
-# is. InAadhaarRecognizer and InPassportRecognizer are deliberately left
-# out: this project's AadhaarChecksumRecognizer and PassportNumberRecognizer
-# replace them (see recognizers/aadhaar_checksum.py and
-# recognizers/other_documents.py for why).
+# is. InAadhaarRecognizer, InPassportRecognizer and InPanRecognizer are
+# deliberately left out: this project's AadhaarChecksumRecognizer,
+# PassportNumberRecognizer and PanRecognizer replace them (see
+# recognizers/aadhaar_checksum.py, recognizers/other_documents.py and
+# recognizers/pan.py for why).
 _INDIA_BUILTINS = [
-    InPanRecognizer,
     InVoterRecognizer,
     InVehicleRegistrationRecognizer,
     InGstinRecognizer,
@@ -100,7 +99,7 @@ _INDIA_BUILTINS = [
 
 # Entity types whose built-in recognizer is replaced, not stacked with a
 # custom one - two recognizers on one type would report the same span twice.
-_REPLACED_BUILTIN_ENTITIES = {AADHAAR_REPLACEMENT_ENTITY, "IN_PASSPORT"}
+_REPLACED_BUILTIN_ENTITIES = {AADHAAR_REPLACEMENT_ENTITY, "IN_PASSPORT", "IN_PAN"}
 
 # Entity types emitted by a recognizer but reported under another name.
 # IN_MOBILE exists only so that the `chat` allow-list alone can request the
